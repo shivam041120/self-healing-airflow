@@ -1,0 +1,15 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Environment variables & secrets
+.env
+
+# Airflow temporary runtime logs
+logs/
+
+# Local database storage
+postgres_data/
+
+# Local AI/LLM data and weights
+ollama_data/

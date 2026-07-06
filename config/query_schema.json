@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SQLTaskConfig",
+  "type": "object",
+  "properties": {
+    "table_name": {
+      "type": "string",
+      "description": "The name of the target database table."
+    },
+    "sql_query": {
+      "type": "string",
+      "description": "The SQL query to be executed by the airflow agent."
+    }
+  },
+  "required": ["table_name", "sql_query"]
+}

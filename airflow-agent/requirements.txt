@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+langgraph
+langchain-ollama
+httpx
+pydantic
+langchain-mcp-adapters
+airflow-mcp-server
+asyncpg

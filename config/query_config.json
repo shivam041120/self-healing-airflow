@@ -1,0 +1,4 @@
+{
+  "table_name": "sales_records",
+  "sql_query": "SELECT * FROM sales_recor_missing_table;"
+}
