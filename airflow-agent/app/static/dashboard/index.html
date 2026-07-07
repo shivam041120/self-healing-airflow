@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Self-Healing Airflow — Ops Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/static/dashboard/styles.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">SH</div>
+        <div>
+          <div class="brand-title">Self-Healing</div>
+          <div class="brand-sub">Airflow Ops Console</div>
+        </div>
+        <button id="sidebar-close" class="btn-icon sidebar-close-btn" aria-label="Close menu">✕</button>
+      </div>
+
+      <div class="live-indicator" id="live-indicator">
+        <span class="dot"></span> Live
+      </div>
+
+      <div class="sidebar-nav-hint">
+        Filters live in <b>Past actions</b>. This view always shows every DAG.
+      </div>
+
+      <div class="sidebar-footer">
+        <a href="/dashboard" class="legacy-link">Legacy static dashboard →</a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="menu-btn" class="btn-icon menu-btn" aria-label="Open menu">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M2.5 5h15M2.5 10h15M2.5 15h15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          <h1 id="page-title">Live monitoring</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="theme-toggle" class="btn-icon theme-toggle" aria-label="Toggle dark mode">
+            <svg id="icon-sun" width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M10 1.5v2M10 16.5v2M18.5 10h-2M3.5 10h-2M15.6 4.4l-1.4 1.4M5.8 14.2l-1.4 1.4M15.6 15.6l-1.4-1.4M5.8 5.8L4.4 4.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <svg id="icon-moon" width="18" height="18" viewBox="0 0 20 20" fill="none" style="display:none"><path d="M17 11.5A7 7 0 018.5 3 7 7 0 1017 11.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+          </button>
+          <button id="refresh-btn" class="btn-secondary">Refresh</button>
+        </div>
+      </header>
+
+      <nav class="tab-bar" role="tablist" aria-label="Console views">
+        <button class="tab-btn" id="tab-btn-live" role="tab" aria-selected="true" aria-controls="panel-live" data-tab="live">
+          <span class="tab-live-dot" id="tab-live-dot" aria-hidden="true"></span>
+          Live monitoring
+        </button>
+        <button class="tab-btn" id="tab-btn-history" role="tab" aria-selected="false" aria-controls="panel-history" data-tab="history">
+          Past actions
+          <span class="tab-badge" id="tab-badge-history" hidden>0</span>
+        </button>
+      </nav>
+
+      <section id="panel-live" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-live">
+        <div class="pipeline-card" id="pipeline-card">
+          <div class="pipeline-header">
+            <span class="pipeline-title">Current run</span>
+            <span class="pipeline-caption" id="pipeline-caption">Waiting for activity…</span>
+          </div>
+          <div class="pipeline-flow" id="pipeline-flow">
+            <div class="pipeline-node" data-group="webhook_received">
+              <div class="pipeline-node-dot"></div>
+              <div class="pipeline-node-label">Webhook</div>
+            </div>
+            <div class="pipeline-arrow"></div>
+            <div class="pipeline-node" data-group="analyze">
+              <div class="pipeline-node-dot"></div>
+              <div class="pipeline-node-label">Analyze</div>
+            </div>
+            <div class="pipeline-arrow"></div>
+            <div class="pipeline-node" data-group="diagnose">
+              <div class="pipeline-node-dot"></div>
+              <div class="pipeline-node-label">Diagnose</div>
+            </div>
+            <div class="pipeline-arrow"></div>
+            <div class="pipeline-node" data-group="action">
+              <div class="pipeline-node-dot"></div>
+              <div class="pipeline-node-label">Action</div>
+            </div>
+            <div class="pipeline-arrow"></div>
+            <div class="pipeline-node" data-group="verify">
+              <div class="pipeline-node-dot"></div>
+              <div class="pipeline-node-label">Verify</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="feed-card">
+          <div class="feed-header">
+            <span class="pipeline-title">Event stream</span>
+            <span class="feed-meta" id="feed-meta">watching for the next failure…</span>
+          </div>
+          <div class="feed-body" id="feed-body">
+            <div class="feed-empty" id="feed-empty">
+              <span class="feed-radar" aria-hidden="true"></span>
+              No events yet this session. This fills in the instant a node writes a decision.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="panel-history" class="tab-panel" hidden role="tabpanel" aria-labelledby="tab-btn-history">
+        <div class="filter-bar">
+          <div class="filter-group">
+            <label>DAG</label>
+            <select id="filter-dag"><option value="">All DAGs</option></select>
+          </div>
+          <div class="filter-group">
+            <label>Task</label>
+            <select id="filter-task"><option value="">All tasks</option></select>
+          </div>
+          <div class="filter-group">
+            <label>Status</label>
+            <select id="filter-status">
+              <option value="">All statuses</option>
+              <option value="fixed">Fixed</option>
+              <option value="escalated">Escalated</option>
+              <option value="unresolved">Unresolved</option>
+              <option value="no_action">No action needed</option>
+              <option value="crashed">Crashed</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Time range</label>
+            <select id="filter-range">
+              <option value="24">Last 24h</option>
+              <option value="168" selected>Last 7 days</option>
+              <option value="720">Last 30 days</option>
+              <option value="">All time</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="insights-row">
+          <div class="health-ring-card" id="health-ring-card">
+            <svg viewBox="0 0 100 100" width="88" height="88" class="health-ring-svg">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="var(--gray-bg)" stroke-width="10"/>
+              <circle id="health-ring-arc" cx="50" cy="50" r="42" fill="none" stroke="var(--green)" stroke-width="10"
+                      stroke-linecap="round" stroke-dasharray="264" stroke-dashoffset="264"
+                      transform="rotate(-90 50 50)"/>
+              <text x="50" y="47" text-anchor="middle" class="health-ring-value" id="health-ring-value">—</text>
+              <text x="50" y="62" text-anchor="middle" class="health-ring-sub">auto-fixed</text>
+            </svg>
+            <div class="health-ring-label">Self-heal rate</div>
+          </div>
+          <div class="stat-cards" id="stat-cards"></div>
+        </div>
+
+        <div class="trend-card">
+          <div class="trend-header">Incidents per day</div>
+          <canvas id="trend-chart" height="70"></canvas>
+        </div>
+
+        <div class="incident-table-card">
+          <table id="incident-table">
+            <thead>
+              <tr>
+                <th>DAG / Task</th>
+                <th>Run</th>
+                <th>Status</th>
+                <th>Timeline</th>
+                <th>Attempts</th>
+                <th>Ended</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="incident-rows">
+              <tr><td colspan="7" class="empty-state">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="drawer-backdrop" id="drawer-backdrop"></div>
+  <aside class="drawer" id="drawer">
+    <div class="drawer-header">
+      <h2 id="drawer-title">Incident detail</h2>
+      <button id="drawer-close" class="btn-icon">✕</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/static/dashboard/app.js"></script>
+</body>
+</html>
