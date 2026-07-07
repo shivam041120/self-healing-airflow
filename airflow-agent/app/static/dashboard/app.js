@@ -21,10 +21,6 @@ const GROUP_ORDER = ["webhook_received", "analyze", "diagnose", "action", "verif
 
 let currentIncidents = [];
 let pipelineIdleTimer = null;
-let activeTab = "live";
-let historyUnread = 0;
-let historyLoadedOnce = false;
-const MAX_FEED_LINES = 250;
 
 function qs(id) { return document.getElementById(id); }
 
@@ -61,6 +57,56 @@ async function loadStats() {
   const res = await fetch(`/api/stats?since_hours=${range}`);
   const data = await res.json();
   renderTrendChart(data.trend);
+}
+
+async function loadHeatmap() {
+  const res = await fetch(`/api/heatmap?days=90`);
+  const data = await res.json();
+  renderHeatmap(data.days);
+}
+
+function heatmapColor(day) {
+  if (day.total === 0) return "var(--gray-bg)";
+  // Blend from green (all resolved cleanly) to red (mostly escalated/
+  // unresolved/crashed) based on bad_ratio, then let opacity reflect volume
+  // so a single bad incident doesn't look as alarming as ten of them.
+  const ratio = day.bad_ratio;
+  const color = ratio > 0.5 ? "220,38,38" : ratio > 0 ? "217,119,6" : "5,150,105";
+  const intensity = Math.min(1, 0.35 + day.total * 0.15);
+  return `rgba(${color},${intensity})`;
+}
+
+function renderHeatmap(days) {
+  const grid = qs("heatmap-grid");
+  grid.innerHTML = days
+    .map((d) => {
+      const label = d.total === 0
+        ? `${d.date}: no incidents`
+        : `${d.date}: ${d.total} incident${d.total === 1 ? "" : "s"}, ${Math.round(d.bad_ratio * 100)}% needed escalation`;
+      return `<div class="heatmap-cell" title="${label}" style="background:${heatmapColor(d)};"></div>`;
+    })
+    .join("");
+}
+
+function initTheme() {
+  const saved = localStorage.getItem("sh-theme");
+  if (saved === "dark") {
+    document.documentElement.setAttribute("data-theme", "dark");
+    qs("theme-toggle").textContent = "☀️ Light mode";
+  }
+  qs("theme-toggle").addEventListener("click", () => {
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    if (isDark) {
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.setItem("sh-theme", "light");
+      qs("theme-toggle").textContent = "🌙 Dark mode";
+    } else {
+      document.documentElement.setAttribute("data-theme", "dark");
+      localStorage.setItem("sh-theme", "dark");
+      qs("theme-toggle").textContent = "☀️ Light mode";
+    }
+    if (trendChart) trendChart.update();
+  });
 }
 
 function populateFilterOptions(incidents) {
@@ -107,44 +153,12 @@ function renderStatCards(summary) {
     </div>`
     )
     .join("");
-  renderHealthRing(summary);
-}
-
-const RING_CIRCUMFERENCE = 2 * Math.PI * 42;
-
-function renderHealthRing(summary) {
-  const s = summary.by_status;
-  const fixed = s["Fixed"] || 0;
-  const decided = fixed + (s["Escalated"] || 0) + (s["Unresolved"] || 0);
-  const pct = decided > 0 ? Math.round((fixed / decided) * 100) : null;
-
-  const arc = qs("health-ring-arc");
-  const valueEl = qs("health-ring-value");
-  if (pct === null) {
-    arc.style.strokeDashoffset = RING_CIRCUMFERENCE;
-    valueEl.textContent = "—";
-    return;
-  }
-  const offset = RING_CIRCUMFERENCE * (1 - pct / 100);
-  arc.style.strokeDasharray = RING_CIRCUMFERENCE;
-  arc.style.strokeDashoffset = offset;
-  arc.style.stroke = pct >= 66 ? "var(--green)" : pct >= 33 ? "var(--amber)" : "var(--red)";
-  valueEl.textContent = `${pct}%`;
-}
-
-function chartThemeColors() {
-  const dark = document.documentElement.getAttribute("data-theme") === "dark";
-  return {
-    grid: dark ? "#2c3038" : "#eee",
-    text: dark ? "#9aa0aa" : "#6b7280",
-  };
 }
 
 let trendChart = null;
 function renderTrendChart(trend) {
   const ctx = qs("trend-chart");
   const labels = trend.map((t) => t.date.slice(5));
-  const colors = chartThemeColors();
   const datasets = [
     { key: "Fixed", color: "#059669" },
     { key: "Escalated", color: "#d97706" },
@@ -161,10 +175,6 @@ function renderTrendChart(trend) {
   if (trendChart) {
     trendChart.data.labels = labels;
     trendChart.data.datasets = datasets;
-    trendChart.options.plugins.legend.labels.color = colors.text;
-    trendChart.options.scales.x.ticks.color = colors.text;
-    trendChart.options.scales.y.ticks.color = colors.text;
-    trendChart.options.scales.y.grid.color = colors.grid;
     trendChart.update();
     return;
   }
@@ -174,79 +184,13 @@ function renderTrendChart(trend) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: {
-        legend: { display: true, position: "bottom", labels: { boxWidth: 10, font: { size: 11 }, color: colors.text } },
-      },
+      plugins: { legend: { display: true, position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } } },
       scales: {
-        x: { stacked: true, grid: { display: false }, ticks: { color: colors.text } },
-        y: { stacked: true, ticks: { precision: 0, color: colors.text }, grid: { color: colors.grid } },
+        x: { stacked: true, grid: { display: false } },
+        y: { stacked: true, ticks: { precision: 0 }, grid: { color: "#eee" } },
       },
     },
   });
-}
-
-const TAB_TITLES = { live: "Live monitoring", history: "Past actions" };
-
-function switchTab(tab, { pushHash = true } = {}) {
-  if (tab !== "live" && tab !== "history") tab = "live";
-  activeTab = tab;
-
-  qs("panel-live").hidden = tab !== "live";
-  qs("panel-history").hidden = tab !== "history";
-  qs("page-title").textContent = TAB_TITLES[tab];
-
-  qs("tab-btn-live").setAttribute("aria-selected", String(tab === "live"));
-  qs("tab-btn-history").setAttribute("aria-selected", String(tab === "history"));
-
-  if (tab === "history") {
-    historyUnread = 0;
-    updateHistoryBadge();
-    if (!historyLoadedOnce) {
-      historyLoadedOnce = true;
-      loadIncidents();
-      loadStats();
-    }
-  }
-
-  if (pushHash) location.hash = tab;
-}
-
-function updateHistoryBadge() {
-  const badge = qs("tab-badge-history");
-  if (historyUnread > 0) {
-    badge.hidden = false;
-    badge.textContent = historyUnread > 99 ? "99+" : String(historyUnread);
-  } else {
-    badge.hidden = true;
-  }
-}
-
-function initTabs() {
-  qs("tab-btn-live").addEventListener("click", () => switchTab("live"));
-  qs("tab-btn-history").addEventListener("click", () => switchTab("history"));
-  window.addEventListener("hashchange", () => switchTab(location.hash.replace("#", ""), { pushHash: false }));
-  switchTab(location.hash.replace("#", "") || "live", { pushHash: false });
-}
-
-function feedLine(row, incident) {
-  const dot = qs("feed-empty");
-  if (dot) dot.remove();
-
-  const body = qs("feed-body");
-  const time = new Date(row.created_at || Date.now()).toLocaleTimeString();
-  const detail = row.action_decision || (row.verification_result === true ? "verified ok" : row.verification_result === false ? "not verified" : "");
-  const line = document.createElement("div");
-  line.className = "feed-line";
-  line.innerHTML = `<span class="feed-time">${time}</span> <span class="feed-node feed-node-${row.node}">[${row.node}]</span> ${incident.dag_id}/${incident.task_id} ${detail ? "&mdash; " + escapeHtml(detail) : ""}`;
-  body.appendChild(line);
-  while (body.children.length > MAX_FEED_LINES) body.removeChild(body.firstChild);
-  body.scrollTop = body.scrollHeight;
-
-  qs("feed-meta").textContent = `last event ${time}`;
-}
-
-function setLiveDot(on) {
-  qs("tab-live-dot").classList.toggle("active", !!on);
 }
 
 function timelineChips(timeline) {
@@ -265,13 +209,13 @@ function renderTable(incidents) {
     .map(
       (i) => `
     <tr data-key="${i.dag_id}|${i.task_id}|${i.dag_run_id}">
-      <td class="dag-task" data-label="DAG / task"><div class="dag">${i.dag_id}</div><div class="task">${i.task_id}</div></td>
-      <td data-label="Run">${i.dag_run_id}</td>
-      <td data-label="Status"><span class="pill pill-${i.status}">${i.status_label}</span></td>
-      <td data-label="Timeline"><div class="timeline-chips">${timelineChips(i.timeline)}</div></td>
-      <td data-label="Attempts">${i.attempts}</td>
-      <td data-label="Ended">${fmtTime(i.ended_at)}</td>
-      <td data-label=""><button class="row-view-btn" onclick="openDrawer('${i.dag_id}','${i.task_id}','${i.dag_run_id}')">view</button></td>
+      <td class="dag-task"><div class="dag">${i.dag_id}</div><div class="task">${i.task_id}</div></td>
+      <td>${i.dag_run_id}</td>
+      <td><span class="pill pill-${i.status}">${i.status_label}</span></td>
+      <td><div class="timeline-chips">${timelineChips(i.timeline)}</div></td>
+      <td>${i.attempts}</td>
+      <td>${fmtTime(i.ended_at)}</td>
+      <td><button class="row-view-btn" onclick="openDrawer('${i.dag_id}','${i.task_id}','${i.dag_run_id}')">view</button></td>
     </tr>`
     )
     .join("");
@@ -433,64 +377,20 @@ function connectStream() {
     const incident = await res.json();
     if (incident.error) return;
 
-    setLiveDot(true);
-    clearTimeout(connectStream._dotTimer);
-    connectStream._dotTimer = setTimeout(() => setLiveDot(false), 5000);
-
     animatePipeline(incident);
     upsertIncidentRow(incident);
-    if (historyLoadedOnce) loadStats();
+    loadStats();
 
     const lastRow = incident.rows[incident.rows.length - 1];
-    feedLine(lastRow, incident);
     showToast(`${lastRow.node}: ${lastRow.action_decision || lastRow.node} — ${incident.dag_id}/${incident.task_id}`);
-
-    if (activeTab !== "history") {
-      historyUnread += 1;
-      updateHistoryBadge();
-    }
   });
-}
-
-function initTheme() {
-  const saved = localStorage.getItem("console-theme");
-  const preferred = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  applyTheme(preferred);
-
-  qs("theme-toggle").addEventListener("click", () => {
-    const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
-    applyTheme(next);
-    localStorage.setItem("console-theme", next);
-  });
-}
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-  qs("icon-sun").style.display = theme === "dark" ? "none" : "block";
-  qs("icon-moon").style.display = theme === "dark" ? "block" : "none";
-  if (trendChart) loadStats();
-}
-
-function initMobileSidebar() {
-  const sidebar = qs("sidebar");
-  const backdrop = qs("sidebar-backdrop");
-  const open = () => {
-    sidebar.classList.add("mobile-open");
-    backdrop.classList.add("open");
-  };
-  const close = () => {
-    sidebar.classList.remove("mobile-open");
-    backdrop.classList.remove("open");
-  };
-  qs("menu-btn").addEventListener("click", open);
-  qs("sidebar-close").addEventListener("click", close);
-  backdrop.addEventListener("click", close);
 }
 
 function init() {
   initTheme();
-  initMobileSidebar();
-  initTabs();
+  loadIncidents();
+  loadStats();
+  loadHeatmap();
   connectStream();
 
   ["filter-dag", "filter-task", "filter-status", "filter-range"].forEach((id) => {
@@ -500,10 +400,8 @@ function init() {
     });
   });
   qs("refresh-btn").addEventListener("click", () => {
-    if (activeTab === "history") {
-      loadIncidents();
-      loadStats();
-    }
+    loadIncidents();
+    loadStats();
   });
   qs("drawer-close").addEventListener("click", closeDrawer);
   qs("drawer-backdrop").addEventListener("click", closeDrawer);
