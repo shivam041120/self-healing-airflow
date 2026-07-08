@@ -217,6 +217,12 @@ services:
   airflow-worker:
     <<: *airflow-common
     command: celery worker
+    # Without this, the container's hostname defaults to a random ID
+    # (e.g. 05b35495d9e6) that other containers can't resolve via DNS —
+    # this is exactly what causes "Could not read served logs: Hostname
+    # not available for worker" when viewing task logs, and silently
+    # breaks the agent's log-fetching the same way.
+    hostname: airflow-worker
     healthcheck:
       # yamllint disable rule:line-length
       test: ["CMD-SHELL", 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"']
