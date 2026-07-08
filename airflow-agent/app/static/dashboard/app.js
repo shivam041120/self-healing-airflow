@@ -32,10 +32,10 @@ function fmtTime(iso) {
 
 function buildQuery() {
   const params = new URLSearchParams();
-  const dag = qs("filter-dag").value;
-  const task = qs("filter-task").value;
-  const status = qs("filter-status").value;
-  const range = qs("filter-range").value;
+  const dag = qs("filter-dag")?.value;
+  const task = qs("filter-task")?.value;
+  const status = qs("filter-status")?.value;
+  const range = qs("filter-range")?.value;
   if (dag) params.set("dag_id", dag);
   if (task) params.set("task_id", task);
   if (status) params.set("status", status);
@@ -53,23 +53,45 @@ async function loadIncidents() {
 }
 
 async function loadStats() {
-  const range = qs("filter-range").value || 14 * 24;
+  const range = qs("filter-range")?.value || 14 * 24;
   const res = await fetch(`/api/stats?since_hours=${range}`);
   const data = await res.json();
   renderTrendChart(data.trend);
 }
 
+// --- Heatmap (self-contained: builds its own DOM if the page doesn't
+// already have a #heatmap-grid container, so it can never crash init()
+// just because a given layout hasn't been wired up for it yet) ---
 async function loadHeatmap() {
+  let grid = qs("heatmap-grid");
+  if (!grid) {
+    const card = document.createElement("section");
+    card.className = "heatmap-card";
+    card.innerHTML = `
+      <div class="heatmap-header">
+        <span>Incident density — last 90 days</span>
+        <div class="heatmap-legend">
+          <span>fewer</span>
+          <span class="legend-swatch" style="background:#e5e7eb;"></span>
+          <span class="legend-swatch" style="background:#a7f3d0;"></span>
+          <span class="legend-swatch" style="background:#059669;"></span>
+          <span class="legend-swatch" style="background:#dc2626;"></span>
+          <span>more / worse</span>
+        </div>
+      </div>
+      <div class="heatmap-grid" id="heatmap-grid"></div>
+    `;
+    const anchor = document.querySelector(".pipeline-card") || document.querySelector("main") || document.body;
+    anchor.insertAdjacentElement("afterend", card);
+    grid = qs("heatmap-grid");
+  }
   const res = await fetch(`/api/heatmap?days=90`);
   const data = await res.json();
   renderHeatmap(data.days);
 }
 
 function heatmapColor(day) {
-  if (day.total === 0) return "var(--gray-bg)";
-  // Blend from green (all resolved cleanly) to red (mostly escalated/
-  // unresolved/crashed) based on bad_ratio, then let opacity reflect volume
-  // so a single bad incident doesn't look as alarming as ten of them.
+  if (day.total === 0) return "#e5e7eb";
   const ratio = day.bad_ratio;
   const color = ratio > 0.5 ? "220,38,38" : ratio > 0 ? "217,119,6" : "5,150,105";
   const intensity = Math.min(1, 0.35 + day.total * 0.15);
@@ -78,6 +100,7 @@ function heatmapColor(day) {
 
 function renderHeatmap(days) {
   const grid = qs("heatmap-grid");
+  if (!grid) return;
   grid.innerHTML = days
     .map((d) => {
       const label = d.total === 0
@@ -88,22 +111,34 @@ function renderHeatmap(days) {
     .join("");
 }
 
+// --- Theme toggle (self-contained: creates its own button if the page
+// doesn't already have a #theme-toggle element) ---
 function initTheme() {
+  let btn = qs("theme-toggle");
+  if (!btn) {
+    const topbar = document.querySelector(".topbar") || document.querySelector("header") || document.body;
+    btn = document.createElement("button");
+    btn.id = "theme-toggle";
+    btn.className = "btn-secondary theme-toggle";
+    btn.type = "button";
+    btn.textContent = "🌙 Dark mode";
+    topbar.appendChild(btn);
+  }
   const saved = localStorage.getItem("sh-theme");
   if (saved === "dark") {
     document.documentElement.setAttribute("data-theme", "dark");
-    qs("theme-toggle").textContent = "☀️ Light mode";
+    btn.textContent = "☀️ Light mode";
   }
-  qs("theme-toggle").addEventListener("click", () => {
+  btn.addEventListener("click", () => {
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
     if (isDark) {
       document.documentElement.removeAttribute("data-theme");
       localStorage.setItem("sh-theme", "light");
-      qs("theme-toggle").textContent = "🌙 Dark mode";
+      btn.textContent = "🌙 Dark mode";
     } else {
       document.documentElement.setAttribute("data-theme", "dark");
       localStorage.setItem("sh-theme", "dark");
-      qs("theme-toggle").textContent = "☀️ Light mode";
+      btn.textContent = "☀️ Light mode";
     }
     if (trendChart) trendChart.update();
   });
@@ -112,6 +147,7 @@ function initTheme() {
 function populateFilterOptions(incidents) {
   const dagSel = qs("filter-dag");
   const taskSel = qs("filter-task");
+  if (!dagSel || !taskSel) return;
   const keep = (sel, values, allLabel) => {
     const current = sel.value;
     const seen = new Set();
@@ -136,6 +172,7 @@ function populateFilterOptions(incidents) {
 
 function renderStatCards(summary) {
   const el = qs("stat-cards");
+  if (!el) return;
   const s = summary.by_status;
   const cards = [
     { label: "Incidents", value: summary.total, cls: "" },
@@ -158,6 +195,7 @@ function renderStatCards(summary) {
 let trendChart = null;
 function renderTrendChart(trend) {
   const ctx = qs("trend-chart");
+  if (!ctx) return;
   const labels = trend.map((t) => t.date.slice(5));
   const datasets = [
     { key: "Fixed", color: "#059669" },
@@ -176,6 +214,10 @@ function renderTrendChart(trend) {
     trendChart.data.labels = labels;
     trendChart.data.datasets = datasets;
     trendChart.update();
+    return;
+  }
+  if (typeof Chart === "undefined") {
+    console.error("Chart.js not loaded — trend chart skipped.");
     return;
   }
   trendChart = new Chart(ctx, {
@@ -201,6 +243,7 @@ function timelineChips(timeline) {
 
 function renderTable(incidents) {
   const body = qs("incident-rows");
+  if (!body) return;
   if (!incidents.length) {
     body.innerHTML = `<tr><td colspan="7" class="empty-state">No agent activity for this filter yet.</td></tr>`;
     return;
@@ -247,8 +290,12 @@ async function openDrawer(dagId, taskId, dagRunId) {
   const incident = await res.json();
   if (incident.error) return;
 
-  qs("drawer-title").textContent = `${incident.dag_id} / ${incident.task_id}`;
-  qs("drawer-body").innerHTML = `
+  const titleEl = qs("drawer-title");
+  const bodyEl = qs("drawer-body");
+  if (!titleEl || !bodyEl) return;
+
+  titleEl.textContent = `${incident.dag_id} / ${incident.task_id}`;
+  bodyEl.innerHTML = `
     <div style="margin-bottom:14px;">
       <span class="pill pill-${incident.status}">${incident.status_label}</span>
       <span style="color:var(--text-muted);font-size:12.5px;margin-left:8px;">run ${incident.dag_run_id}</span>
@@ -280,13 +327,13 @@ async function openDrawer(dagId, taskId, dagRunId) {
       )
       .join("")}
   `;
-  qs("drawer").classList.add("open");
-  qs("drawer-backdrop").classList.add("open");
+  qs("drawer")?.classList.add("open");
+  qs("drawer-backdrop")?.classList.add("open");
 }
 
 function closeDrawer() {
-  qs("drawer").classList.remove("open");
-  qs("drawer-backdrop").classList.remove("open");
+  qs("drawer")?.classList.remove("open");
+  qs("drawer-backdrop")?.classList.remove("open");
 }
 
 function escapeHtml(s) {
@@ -297,6 +344,7 @@ function escapeHtml(s) {
 
 function showToast(msg) {
   const el = qs("toast");
+  if (!el) return;
   el.textContent = msg;
   el.classList.add("show");
   clearTimeout(el._timer);
@@ -306,8 +354,11 @@ function showToast(msg) {
 function resetPipeline() {
   document.querySelectorAll(".pipeline-node").forEach((n) => n.classList.remove("active", "done", "success", "warning", "error"));
   document.querySelectorAll(".pipeline-arrow").forEach((a) => a.classList.remove("lit"));
-  qs("pipeline-caption").textContent = "Waiting for activity…";
-  qs("pipeline-caption").classList.remove("active");
+  const caption = qs("pipeline-caption");
+  if (caption) {
+    caption.textContent = "Waiting for activity…";
+    caption.classList.remove("active");
+  }
 }
 
 function animatePipeline(incident) {
@@ -315,8 +366,11 @@ function animatePipeline(incident) {
   const lastRow = incident.rows[incident.rows.length - 1];
   const group = NODE_GROUP[lastRow.node] || "webhook_received";
 
-  qs("pipeline-caption").textContent = `${incident.dag_id} / ${incident.task_id} (run ${incident.dag_run_id})`;
-  qs("pipeline-caption").classList.add("active");
+  const caption = qs("pipeline-caption");
+  if (caption) {
+    caption.textContent = `${incident.dag_id} / ${incident.task_id} (run ${incident.dag_run_id})`;
+    caption.classList.add("active");
+  }
 
   document.querySelectorAll(".pipeline-node").forEach((n) => n.classList.remove("active", "done", "success", "warning", "error"));
   document.querySelectorAll(".pipeline-arrow").forEach((a) => a.classList.remove("lit"));
@@ -361,8 +415,8 @@ function connectStream() {
   const indicator = qs("live-indicator");
   const source = new EventSource("/api/stream");
 
-  source.onopen = () => indicator.classList.remove("offline");
-  source.onerror = () => indicator.classList.add("offline");
+  source.onopen = () => indicator?.classList.remove("offline");
+  source.onerror = () => indicator?.classList.add("offline");
 
   source.addEventListener("incident_update", async (e) => {
     let key;
@@ -379,32 +433,46 @@ function connectStream() {
 
     animatePipeline(incident);
     upsertIncidentRow(incident);
-    loadStats();
+    loadStats().catch((e) => console.error("loadStats failed", e));
 
     const lastRow = incident.rows[incident.rows.length - 1];
     showToast(`${lastRow.node}: ${lastRow.action_decision || lastRow.node} — ${incident.dag_id}/${incident.task_id}`);
   });
 }
 
+// Runs each init step independently — one failing (missing element,
+// failed fetch, whatever) no longer takes the rest of the app down with
+// it. This is the actual fix for "page loads but no data ever appears."
+function safeRun(fn, label) {
+  try {
+    const result = fn();
+    if (result && typeof result.catch === "function") {
+      result.catch((e) => console.error(`[init] ${label} failed:`, e));
+    }
+  } catch (e) {
+    console.error(`[init] ${label} failed:`, e);
+  }
+}
+
 function init() {
-  initTheme();
-  loadIncidents();
-  loadStats();
-  loadHeatmap();
-  connectStream();
+  safeRun(initTheme, "initTheme");
+  safeRun(loadIncidents, "loadIncidents");
+  safeRun(loadStats, "loadStats");
+  safeRun(loadHeatmap, "loadHeatmap");
+  safeRun(connectStream, "connectStream");
 
   ["filter-dag", "filter-task", "filter-status", "filter-range"].forEach((id) => {
-    qs(id).addEventListener("change", () => {
-      loadIncidents();
-      loadStats();
+    qs(id)?.addEventListener("change", () => {
+      safeRun(loadIncidents, "loadIncidents");
+      safeRun(loadStats, "loadStats");
     });
   });
-  qs("refresh-btn").addEventListener("click", () => {
-    loadIncidents();
-    loadStats();
+  qs("refresh-btn")?.addEventListener("click", () => {
+    safeRun(loadIncidents, "loadIncidents");
+    safeRun(loadStats, "loadStats");
   });
-  qs("drawer-close").addEventListener("click", closeDrawer);
-  qs("drawer-backdrop").addEventListener("click", closeDrawer);
+  qs("drawer-close")?.addEventListener("click", closeDrawer);
+  qs("drawer-backdrop")?.addEventListener("click", closeDrawer);
 }
 
 document.addEventListener("DOMContentLoaded", init);
