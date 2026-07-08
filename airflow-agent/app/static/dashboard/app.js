@@ -508,7 +508,6 @@ function init() {
   safeRun(initTabs, "initTabs");
   safeRun(initSidebar, "initSidebar");
   safeRun(loadIncidents, "loadIncidents");
-  safeRun(loadStats, "loadStats");
   safeRun(loadHeatmap, "loadHeatmap");
   safeRun(connectStream, "connectStream");
 
