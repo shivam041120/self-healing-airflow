@@ -153,7 +153,7 @@ async def get_decisions(
         query += f" AND task_id = ${len(params)}"
     if since_hours:
         params.append(since_hours)
-        query += f" AND created_at >= now() - (${len(params)} || ' hours')::interval"
+        query += f" AND created_at >= now() - make_interval(hours => ${len(params)})"
     query += " ORDER BY created_at DESC"
     params.append(limit)
     query += f" LIMIT ${len(params)}"
