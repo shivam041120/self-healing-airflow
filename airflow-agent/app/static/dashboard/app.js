@@ -111,37 +111,86 @@ function renderHeatmap(days) {
     .join("");
 }
 
-// --- Theme toggle (self-contained: creates its own button if the page
-// doesn't already have a #theme-toggle element) ---
+// --- Theme toggle: uses the real #icon-sun/#icon-moon SVGs already in
+// the button, rather than overwriting them with text (which is what the
+// previous version of this function did — it worked, but silently
+// destroyed the icons the first time you clicked it). ---
 function initTheme() {
-  let btn = qs("theme-toggle");
-  if (!btn) {
-    const topbar = document.querySelector(".topbar") || document.querySelector("header") || document.body;
-    btn = document.createElement("button");
-    btn.id = "theme-toggle";
-    btn.className = "btn-secondary theme-toggle";
-    btn.type = "button";
-    btn.textContent = "🌙 Dark mode";
-    topbar.appendChild(btn);
+  const btn = qs("theme-toggle");
+  if (!btn) return;
+  const sun = qs("icon-sun");
+  const moon = qs("icon-moon");
+
+  function applyTheme(isDark) {
+    if (isDark) {
+      document.documentElement.setAttribute("data-theme", "dark");
+      if (sun) sun.style.display = "none";
+      if (moon) moon.style.display = "";
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+      if (sun) sun.style.display = "";
+      if (moon) moon.style.display = "none";
+    }
   }
-  const saved = localStorage.getItem("sh-theme");
-  if (saved === "dark") {
-    document.documentElement.setAttribute("data-theme", "dark");
-    btn.textContent = "☀️ Light mode";
-  }
+
+  applyTheme(localStorage.getItem("sh-theme") === "dark");
+
   btn.addEventListener("click", () => {
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    if (isDark) {
-      document.documentElement.removeAttribute("data-theme");
-      localStorage.setItem("sh-theme", "light");
-      btn.textContent = "🌙 Dark mode";
-    } else {
-      document.documentElement.setAttribute("data-theme", "dark");
-      localStorage.setItem("sh-theme", "dark");
-      btn.textContent = "☀️ Light mode";
-    }
+    applyTheme(!isDark);
+    localStorage.setItem("sh-theme", !isDark ? "dark" : "light");
     if (trendChart) trendChart.update();
   });
+}
+
+// --- Tab switching: the actual missing piece. The HTML already has
+// .tab-btn buttons with data-tab="live"/"history" and matching
+// #panel-live/#panel-history sections using the `hidden` attribute —
+// nothing was ever listening for clicks to toggle it. ---
+function initTabs() {
+  const buttons = document.querySelectorAll(".tab-btn");
+  if (!buttons.length) return;
+
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = btn.dataset.tab;
+
+      buttons.forEach((b) => b.setAttribute("aria-selected", b === btn ? "true" : "false"));
+
+      document.querySelectorAll(".tab-panel").forEach((panel) => {
+        panel.hidden = panel.id !== `panel-${target}`;
+      });
+
+      const title = qs("page-title");
+      if (title) title.textContent = target === "live" ? "Live monitoring" : "Past actions";
+
+      // Past actions' data was fetched at page load, but re-fetch on
+      // first visit to that tab too, in case it loaded before Postgres
+      // was ready or filters changed while the tab was hidden.
+      if (target === "history") {
+        safeRun(loadIncidents, "loadIncidents");
+        safeRun(loadStats, "loadStats");
+      }
+    });
+  });
+}
+
+// --- Mobile sidebar toggle: same class of gap as the tabs — the
+// hamburger/close buttons and backdrop exist in the HTML with no
+// listener wired to them yet. ---
+function initSidebar() {
+  const menuBtn = qs("menu-btn");
+  const closeBtn = qs("sidebar-close");
+  const backdrop = qs("sidebar-backdrop");
+  const sidebar = qs("sidebar");
+  if (!sidebar) return;
+
+  const open = () => { sidebar.classList.add("open"); backdrop?.classList.add("open"); };
+  const close = () => { sidebar.classList.remove("open"); backdrop?.classList.remove("open"); };
+
+  menuBtn?.addEventListener("click", open);
+  closeBtn?.addEventListener("click", close);
+  backdrop?.addEventListener("click", close);
 }
 
 function populateFilterOptions(incidents) {
@@ -456,6 +505,8 @@ function safeRun(fn, label) {
 
 function init() {
   safeRun(initTheme, "initTheme");
+  safeRun(initTabs, "initTabs");
+  safeRun(initSidebar, "initSidebar");
   safeRun(loadIncidents, "loadIncidents");
   safeRun(loadStats, "loadStats");
   safeRun(loadHeatmap, "loadHeatmap");
