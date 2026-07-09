@@ -460,6 +460,54 @@ function scheduleIdleReset() {
   pipelineIdleTimer = setTimeout(resetPipeline, 9000);
 }
 
+// The agent can write many decision rows per incident (each node, each
+// retry loop), and each write fires an SSE event. Reacting to every event
+// individually means one busy incident — or several failing at once —
+// turns into a flood of detail+stats fetches that can bury a single
+// uvicorn worker. Instead, coalesce bursts: track which incidents changed
+// and how many events came in, then do at most one refresh pass per
+// DEBOUNCE_MS, covering every incident that changed in that window.
+const DEBOUNCE_MS = 400;
+let pendingKeys = new Map(); // "dag_id/task_id/dag_run_id" -> key
+let pendingEventCount = 0;
+let debounceTimer = null;
+
+function scheduleDebouncedRefresh() {
+  if (debounceTimer) return;
+  debounceTimer = setTimeout(async () => {
+    const keys = Array.from(pendingKeys.values());
+    const eventCount = pendingEventCount;
+    pendingKeys = new Map();
+    pendingEventCount = 0;
+    debounceTimer = null;
+
+    for (const key of keys) {
+      try {
+        const res = await fetch(
+          `/api/incidents/${encodeURIComponent(key.dag_id)}/${encodeURIComponent(key.task_id)}/${encodeURIComponent(key.dag_run_id)}`
+        );
+        const incident = await res.json();
+        if (incident.error) continue;
+
+        animatePipeline(incident);
+        upsertIncidentRow(incident);
+
+        const lastRow = incident.rows[incident.rows.length - 1];
+        showToast(`${lastRow.node}: ${lastRow.action_decision || lastRow.node} — ${incident.dag_id}/${incident.task_id}`);
+      } catch (e) {
+        console.error("[stream] incident refresh failed", e);
+      }
+    }
+
+    // One stats refresh per batch, not one per event — this is the
+    // expensive query (up to 5000 rows, regrouped), so it's the one most
+    // worth collapsing.
+    if (eventCount > 0) {
+      loadStats().catch((e) => console.error("loadStats failed", e));
+    }
+  }, DEBOUNCE_MS);
+}
+
 function connectStream() {
   const indicator = qs("live-indicator");
   const source = new EventSource("/api/stream");
@@ -467,25 +515,16 @@ function connectStream() {
   source.onopen = () => indicator?.classList.remove("offline");
   source.onerror = () => indicator?.classList.add("offline");
 
-  source.addEventListener("incident_update", async (e) => {
+  source.addEventListener("incident_update", (e) => {
     let key;
     try {
       key = JSON.parse(e.data);
     } catch {
       return;
     }
-    const res = await fetch(
-      `/api/incidents/${encodeURIComponent(key.dag_id)}/${encodeURIComponent(key.task_id)}/${encodeURIComponent(key.dag_run_id)}`
-    );
-    const incident = await res.json();
-    if (incident.error) return;
-
-    animatePipeline(incident);
-    upsertIncidentRow(incident);
-    loadStats().catch((e) => console.error("loadStats failed", e));
-
-    const lastRow = incident.rows[incident.rows.length - 1];
-    showToast(`${lastRow.node}: ${lastRow.action_decision || lastRow.node} — ${incident.dag_id}/${incident.task_id}`);
+    pendingKeys.set(`${key.dag_id}/${key.task_id}/${key.dag_run_id}`, key);
+    pendingEventCount += 1;
+    scheduleDebouncedRefresh();
   });
 }
 

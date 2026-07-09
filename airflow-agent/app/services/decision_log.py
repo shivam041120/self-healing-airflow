@@ -37,7 +37,7 @@ async def get_pool():
             user=POSTGRES_USER,
             password=POSTGRES_PASSWORD,
             min_size=1,
-            max_size=5,
+            max_size=10,
         )
     return _pool
 
