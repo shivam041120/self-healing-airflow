@@ -102,6 +102,7 @@ services:
       context: ./airflow-agent
       dockerfile: Dockerfile
     container_name: airflow-agent
+    mem_limit: 1g
     ports:
       - "8000:8000"
     volumes:
@@ -138,8 +139,17 @@ services:
       - "11434:11434"
     volumes:
       - ./ollama_data:/root/.ollama
+    environment:
+      # Without these, Ollama can load more than one copy of the model
+      # into memory to serve concurrent requests — so even capping
+      # concurrency in the agent app doesn't stop Ollama itself from
+      # doubling its own memory footprint. Force strict serialization.
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    mem_limit: 4g
   postgres:
     image: postgres:16
+    mem_limit: 1g
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
