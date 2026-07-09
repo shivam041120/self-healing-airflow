@@ -13,7 +13,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from app.services.decision_log import get_decisions, get_raw_connection, NOTIFY_CHANNEL
-from app.services.incident_view import group_into_incidents, compute_summary, compute_daily_trend
+from app.services.incident_view import group_into_incidents, compute_summary, compute_daily_trend, compute_heatmap_days
 
 router = APIRouter(prefix="/api")
 
@@ -54,6 +54,17 @@ async def stats(days: int = Query(default=14, ge=1, le=90), since_hours: int = N
         "summary": compute_summary(incidents),
         "trend": compute_daily_trend(incidents, days=days),
     }
+
+
+@router.get("/heatmap")
+async def heatmap(days: int = Query(default=90, ge=1, le=365)):
+    # This route didn't exist before — the frontend was already calling
+    # it (loadHeatmap() in app.js), silently 404ing, and leaving the
+    # "Incident density" card rendered with a header and legend but no
+    # actual grid, since safeRun() swallows the failed fetch.
+    decisions = await get_decisions(since_hours=days * 24, limit=5000)
+    incidents = group_into_incidents(decisions)
+    return {"days": compute_heatmap_days(incidents, days=days)}
 
 
 @router.get("/stream")

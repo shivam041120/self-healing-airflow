@@ -405,7 +405,7 @@ function resetPipeline() {
   document.querySelectorAll(".pipeline-arrow").forEach((a) => a.classList.remove("lit"));
   const caption = qs("pipeline-caption");
   if (caption) {
-    caption.textContent = "Waiting for activity…";
+    caption.textContent = "No incident in flight — the rail lights up the moment a task fails.";
     caption.classList.remove("active");
   }
 }
@@ -542,10 +542,35 @@ function safeRun(fn, label) {
   }
 }
 
+// Small signature touch: the rail already sits in 3D space (see
+// styles.css .pipeline-rail), so a gentle pointer-driven tilt makes that
+// depth readable instead of static — the card leans toward the cursor
+// like you're looking at a physical console. Skipped for touch devices
+// (no meaningful pointer position) and reduced-motion users.
+function initPipelineTilt() {
+  const flow = qs("pipeline-flow");
+  const rail = document.querySelector(".pipeline-rail");
+  if (!flow || !rail) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (window.matchMedia("(pointer: coarse)").matches) return;
+
+  const BASE_TILT = 10; // matches the resting rotateX in CSS
+  flow.addEventListener("mousemove", (e) => {
+    const rect = flow.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width - 0.5; // -0.5..0.5
+    const py = (e.clientY - rect.top) / rect.height - 0.5;
+    rail.style.transform = `rotateX(${BASE_TILT - py * 8}deg) rotateY(${px * 6}deg)`;
+  });
+  flow.addEventListener("mouseleave", () => {
+    rail.style.transform = `rotateX(${BASE_TILT}deg)`;
+  });
+}
+
 function init() {
   safeRun(initTheme, "initTheme");
   safeRun(initTabs, "initTabs");
   safeRun(initSidebar, "initSidebar");
+  safeRun(initPipelineTilt, "initPipelineTilt");
   safeRun(loadIncidents, "loadIncidents");
   safeRun(loadHeatmap, "loadHeatmap");
   safeRun(connectStream, "connectStream");

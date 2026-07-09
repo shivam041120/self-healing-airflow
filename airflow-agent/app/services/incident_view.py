@@ -148,6 +148,44 @@ def compute_summary(incidents: list) -> dict:
     }
 
 
+def compute_heatmap_days(incidents: list, days: int = 90) -> list[dict]:
+    """
+    Bucket incidents by the day they ended, for the density heatmap: total
+    count per day plus bad_ratio (share of escalated/unresolved/crashed —
+    the outcomes that actually needed a human) so the frontend can color
+    by both volume and severity, not just volume. Mirrors
+    compute_daily_trend's bucketing so the two never drift apart.
+    """
+    from collections import defaultdict
+    from datetime import timedelta, timezone
+
+    bad_statuses = {STATUS_ESCALATED, STATUS_UNRESOLVED, STATUS_CRASHED}
+
+    now = datetime.now(timezone.utc)
+    buckets = OrderedDict()
+    for i in range(days - 1, -1, -1):
+        day = (now - timedelta(days=i)).date().isoformat()
+        buckets[day] = {"total": 0, "bad": 0}
+
+    for incident in incidents:
+        if not incident.ended_at:
+            continue
+        day = incident.ended_at.date().isoformat()
+        if day in buckets:
+            buckets[day]["total"] += 1
+            if incident.status in bad_statuses:
+                buckets[day]["bad"] += 1
+
+    return [
+        {
+            "date": day,
+            "total": counts["total"],
+            "bad_ratio": (counts["bad"] / counts["total"]) if counts["total"] else 0,
+        }
+        for day, counts in buckets.items()
+    ]
+
+
 def compute_daily_trend(incidents: list, days: int = 14) -> list[dict]:
     """
     Bucket incidents by the day they ended, counting per status — feeds the
