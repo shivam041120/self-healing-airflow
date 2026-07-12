@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 from typing import TypedDict, Literal, Optional
 from langgraph.graph import StateGraph, END, START
@@ -8,7 +9,7 @@ from app.core.mcp_client import get_airflow_mcp_tools, find_tool
 from app.services.airflow_api import get_task_logs, clear_task_instance, get_task_instance_state
 from app.services.decision_log import log_decision
 from app.services.schema_healer import diagnose_and_heal
-from app.core.specialists.python_specialist import python_specialist_node
+from app.core.specialists.code_specialist import code_specialist_node
 from app.core.critic_node import critic_node
 from app.core.open_pr_node import open_pr_node
 
@@ -21,6 +22,19 @@ VERIFY_POLL_MAX_ATTEMPTS = int(os.getenv("VERIFY_POLL_MAX_ATTEMPTS", "10"))
 # probably not transient. Better to stop and hand it to a human.
 MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS", "1"))
 TERMINAL_STATES = {"success", "failed", "upstream_failed", "skipped"}
+
+# The small local model is inconsistent at classifying SQL syntax/reference
+# errors as CODE_FIX vs RETRY — it sometimes reads a Postgres error as
+# "just try again" when it's actually a typo'd/wrong SQL string that will
+# fail identically every time. These are Postgres's own well-known error
+# message shapes for exactly that failure class (not the missing-table
+# shape, which schema_healer already owns): a bad keyword/typo in the
+# statement, or a column that doesn't exist. Deterministic, so it doesn't
+# depend on the model getting it right.
+_SQL_CODE_BUG_RE = re.compile(
+    r'syntax error at or near|column "[^"]+" does not exist',
+    re.IGNORECASE,
+)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "phi4-mini")
@@ -171,27 +185,52 @@ async def diagnose_node(state: AgentState):
       sees a concrete next step instead of the loop burning retries on a
       failure that can't fix itself.
     - If the log doesn't match this failure shape at all: pass the LLM's
-      original decision through unchanged.
+      original decision through unchanged, then check for the second,
+      separate SQL-code-bug shape below.
     """
     heal_result = await diagnose_and_heal(state.get("logs", ""))
 
-    if not heal_result.matched:
-        return {}
+    if heal_result.matched:
+        reasoning = f"{state.get('reasoning', '')}\n\n[schema_healer] {heal_result.message}".strip()
+        new_action = "RETRY" if heal_result.fixed else "ESCALATE"
 
-    reasoning = f"{state.get('reasoning', '')}\n\n[schema_healer] {heal_result.message}".strip()
-    new_action = "RETRY" if heal_result.fixed else "ESCALATE"
+        await log_decision(
+            dag_id=state["dag_id"],
+            task_id=state["task_id"],
+            dag_run_id=state["dag_run_id"],
+            node="diagnose",
+            attempt=state.get("attempts", 0),
+            reasoning=heal_result.message,
+            action_decision="AUTO_FIX_APPLIED" if heal_result.fixed else "FIX_SUGGESTED",
+        )
 
-    await log_decision(
-        dag_id=state["dag_id"],
-        task_id=state["task_id"],
-        dag_run_id=state["dag_run_id"],
-        node="diagnose",
-        attempt=state.get("attempts", 0),
-        reasoning=heal_result.message,
-        action_decision="AUTO_FIX_APPLIED" if heal_result.fixed else "FIX_SUGGESTED",
-    )
+        return {"action_decision": new_action, "reasoning": reasoning}
 
-    return {"action_decision": new_action, "reasoning": reasoning}
+    # Not a missing-table shape. Separately: if this is a SQL syntax or
+    # bad-column-reference error and the LLM didn't already call it
+    # CODE_FIX, force it — these are never transient, so RETRY would just
+    # fail identically, and this needs the code_specialist, not a clear-
+    # and-rerun.
+    if state.get("action_decision") != "CODE_FIX" and _SQL_CODE_BUG_RE.search(state.get("logs", "") or ""):
+        reasoning = (
+            f"{state.get('reasoning', '')}\n\n[diagnose] Log matches a SQL syntax/column-reference "
+            f"error, which isn't transient — routing to CODE_FIX instead of "
+            f"{state.get('action_decision')}."
+        ).strip()
+
+        await log_decision(
+            dag_id=state["dag_id"],
+            task_id=state["task_id"],
+            dag_run_id=state["dag_run_id"],
+            node="diagnose",
+            attempt=state.get("attempts", 0),
+            reasoning=reasoning,
+            action_decision="CODE_FIX_FORCED",
+        )
+
+        return {"action_decision": "CODE_FIX", "reasoning": reasoning}
+
+    return {}
 
 
 async def _clear_task_via_mcp(state: AgentState):
@@ -314,7 +353,7 @@ async def escalate_after_retry_node(state: AgentState):
 builder = StateGraph(AgentState)
 builder.add_node("analyze", analyze_node)          # router
 builder.add_node("diagnose", diagnose_node)        # deterministic override for the missing-table shape
-builder.add_node("python_specialist", python_specialist_node)
+builder.add_node("code_specialist", code_specialist_node)
 builder.add_node("critic", critic_node)
 builder.add_node("open_pr", open_pr_node)
 builder.add_node("action", action_node)
@@ -331,14 +370,14 @@ builder.add_conditional_edges(
     "diagnose",
     lambda state: state["action_decision"],
     {
-        "CODE_FIX": "python_specialist",
+        "CODE_FIX": "code_specialist",
         "RETRY": "action",
         "ESCALATE": "action",
         "NONE": "action",
     },
 )
 
-builder.add_edge("python_specialist", "critic")
+builder.add_edge("code_specialist", "critic")
 
 
 def after_critic(state: AgentState):
@@ -346,7 +385,7 @@ def after_critic(state: AgentState):
     if verdict == "approved":
         return "open_pr"
     if verdict == "revise":
-        return "python_specialist"
+        return "code_specialist"
     return END  # "rejected" — escalate, no PR opened
 
 

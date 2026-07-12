@@ -21,6 +21,7 @@ NODE_LABELS = {
     "escalate_after_retry": "Escalated (retry didn't fix it)",
     "graph_crashed": "Crashed",
     "python_specialist": "Propose fix",
+    "code_specialist": "Propose fix",
     "critic": "Review fix",
     "open_pr": "Open PR",
     "retry_after_merge": "Retry after merge",

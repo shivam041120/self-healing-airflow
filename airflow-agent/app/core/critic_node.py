@@ -1,15 +1,15 @@
 """
-Reviews python_specialist's proposed fix before it's allowed to become a
+Reviews code_specialist's proposed fix before it's allowed to become a
 PR. Deliberately a separate LLM call with a skeptical prompt, rather than
 trusting the specialist to grade its own work — a generator that also
 approves itself has no actual check on it.
 
 Three possible verdicts:
   approved - proceed to open_pr_node
-  revise   - send back to python_specialist once, with concerns attached
+  revise   - send back to code_specialist once, with concerns attached
   rejected - give up automatically proposing a fix; escalate to a human
              instead of opening a PR. This also covers the case where
-             python_specialist itself couldn't produce a fix at all.
+             code_specialist itself couldn't produce a fix at all.
 """
 
 import os
@@ -19,7 +19,7 @@ from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
 from app.services.decision_log import log_decision
-from app.core.specialists.python_specialist import MAX_REVISIONS
+from app.core.specialists.code_specialist import MAX_REVISIONS
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "phi4-mini")
@@ -39,7 +39,7 @@ async def critic_node(state: dict):
     dag_id, task_id, dag_run_id = state["dag_id"], state["task_id"], state["dag_run_id"]
     revision_count = state.get("revision_count", 0)
 
-    # python_specialist already bailed (couldn't read the file, LLM
+    # code_specialist already bailed (couldn't read the file, LLM
     # failed, etc.) — nothing to critique, go straight to escalation.
     if not state.get("proposed_fix"):
         await log_decision(
@@ -71,7 +71,7 @@ async def critic_node(state: dict):
         verdict, concerns = "rejected", f"Critic LLM call failed ({type(e).__name__}): {e}"
 
     # Cap revision ping-pong regardless of what the critic wants — see
-    # MAX_REVISIONS in python_specialist.py.
+    # MAX_REVISIONS in code_specialist.py.
     if verdict == "revise" and revision_count >= MAX_REVISIONS:
         verdict = "rejected"
         concerns = f"{concerns}\n\n(Revision limit reached — escalating instead of looping further.)"

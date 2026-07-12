@@ -5,6 +5,16 @@ the router's: given the DAG file that actually failed and the traceback,
 propose a corrected version of that file. It never opens a PR itself
 (that's open_pr_node, and only after critic_node approves) and never
 decides RETRY/ESCALATE (that's the router's job) — one job, one prompt.
+
+Deliberately NOT Python-specific: a DAG file's "code" includes Python
+logic (a typo'd dict key, a bad import) as well as SQL embedded in it as
+a string literal (a SQLExecuteQueryOperator's sql=... argument). Both are
+"the DAG file has a bug in it" in exactly the same sense, and both are
+fixed the same way here — read the whole file, ask the model for a
+corrected whole file, diff it into a PR. Splitting these into separate
+specialists would just duplicate this same mechanism for no benefit; the
+one thing that has to change per failure shape is the prompt's framing,
+not the pipeline around it.
 """
 
 import os
@@ -28,13 +38,14 @@ MAX_REVISIONS = 1
 class ProposedFix(BaseModel):
     corrected_content: str = Field(
         description="The FULL corrected file content — not a diff, not just the changed lines. "
-                     "Must be valid, complete Python (or the file's existing language) that a linter "
-                     "could parse, since this replaces the file wholesale in the PR."
+                     "Must be valid, complete Python that a linter could parse (any SQL embedded "
+                     "as a string literal must also be syntactically valid SQL), since this "
+                     "replaces the file wholesale in the PR."
     )
     summary: str = Field(description="One or two sentences: what was wrong, what changed.")
 
 
-async def python_specialist_node(state: dict):
+async def code_specialist_node(state: dict):
     dag_id, task_id, dag_run_id = state["dag_id"], state["task_id"], state["dag_run_id"]
     logs = state.get("logs", "")
     # A "revision pass" is specifically a call triggered by the critic's
@@ -68,9 +79,13 @@ async def python_specialist_node(state: dict):
         )
 
     prompt = (
-        f"This Airflow DAG file failed with the error below. Propose a corrected version "
-        f"of the ENTIRE file — preserve everything that isn't related to the bug, fix only "
-        f"what's actually broken.\n\n"
+        f"This Airflow DAG file failed with the error below. The bug may be in the "
+        f"Python logic itself, OR in a SQL statement embedded as a string literal "
+        f"(e.g. inside a SQLExecuteQueryOperator's sql=... argument) — read the "
+        f"traceback carefully to tell which. Propose a corrected version of the "
+        f"ENTIRE file — preserve everything that isn't related to the bug, fix only "
+        f"what's actually broken. If the bug is in an embedded SQL string, fix that "
+        f"SQL string in place; do not rewrite unrelated Python around it.\n\n"
         f"File: {repo_path}\n\n"
         f"Current content:\n```python\n{original_content}\n```\n\n"
         f"Failure log:\n{logs}"
@@ -85,7 +100,7 @@ async def python_specialist_node(state: dict):
 
     await log_decision(
         dag_id=dag_id, task_id=task_id, dag_run_id=dag_run_id,
-        node="python_specialist", attempt=state.get("attempts", 0),
+        node="code_specialist", attempt=state.get("attempts", 0),
         reasoning=fix.summary, action_decision="FIX_PROPOSED",
     )
 
@@ -106,7 +121,7 @@ async def _bail(state: dict, reason: str):
     """
     await log_decision(
         dag_id=state["dag_id"], task_id=state["task_id"], dag_run_id=state["dag_run_id"],
-        node="python_specialist", attempt=state.get("attempts", 0),
+        node="code_specialist", attempt=state.get("attempts", 0),
         reasoning=reason, action_decision="ESCALATE",
     )
     return {"action_decision": "ESCALATE", "reasoning": reason, "proposed_fix": None}
