@@ -456,6 +456,7 @@ tbody tr:hover { background: var(--gray-bg); }
 .pill-unresolved { background: var(--red-bg); color: var(--red); }
 .pill-no_action { background: var(--gray-bg); color: var(--gray); }
 .pill-crashed { background: var(--red-bg); color: var(--red); }
+.pill-pending_review { background: var(--blue-bg); color: var(--blue); }
 
 .timeline-chips { display: flex; gap: 4px; flex-wrap: wrap; }
 .chip { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; white-space: nowrap; }

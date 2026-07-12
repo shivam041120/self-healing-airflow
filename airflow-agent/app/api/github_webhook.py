@@ -15,6 +15,7 @@ Two ways to trigger this:
                                 doesn't have
 """
 
+import asyncio
 import hashlib
 import hmac
 import os
@@ -27,6 +28,13 @@ from app.services.decision_log import get_pending_pr, mark_pr_status, log_decisi
 router = APIRouter()
 
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
+
+# Same polling shape as agent.py's verify_node — kept as separate
+# constants (not imported) since this path has nothing else to do with
+# the LangGraph loop and shouldn't need to import from it.
+VERIFY_POLL_INTERVAL_SECONDS = float(os.getenv("VERIFY_POLL_INTERVAL_SECONDS", "3"))
+VERIFY_POLL_MAX_ATTEMPTS = int(os.getenv("VERIFY_POLL_MAX_ATTEMPTS", "10"))
+TERMINAL_STATES = {"success", "failed", "upstream_failed", "skipped"}
 
 
 def _verify_signature(secret: str, payload_body: bytes, signature_header: str) -> bool:
@@ -65,7 +73,31 @@ async def _retry_after_merge(pr_number: int) -> dict:
         node="retry_after_merge", reasoning=f"PR #{pr_number} merged — task cleared for its one post-merge retry.",
         action_decision="CLEAR_AND_RETRY",
     )
-    return {"status": "retried", "dag_id": dag_id, "task_id": task_id, "dag_run_id": dag_run_id}
+
+    # Without this, a fully successful merge+retry has no way to ever
+    # show as "Fixed" on the dashboard — it would just sit at
+    # CLEAR_AND_RETRY forever, indistinguishable from one that's still
+    # pending or one that quietly failed again. Reusing node="verify"
+    # (rather than inventing a new status) means the existing, generic
+    # status logic in incident_view.py picks this up for free.
+    final_state = None
+    for _ in range(VERIFY_POLL_MAX_ATTEMPTS):
+        await asyncio.sleep(VERIFY_POLL_INTERVAL_SECONDS)
+        final_state = get_task_instance_state(dag_id, dag_run_id, task_id)
+        if final_state in TERMINAL_STATES:
+            break
+    success = final_state == "success"
+
+    await log_decision(
+        dag_id=dag_id, task_id=task_id, dag_run_id=dag_run_id,
+        node="verify", reasoning=f"Post-merge retry finished in state: {final_state}",
+        verification_result=success,
+    )
+
+    return {
+        "status": "retried", "dag_id": dag_id, "task_id": task_id,
+        "dag_run_id": dag_run_id, "verified": success, "final_state": final_state,
+    }
 
 
 @router.post("/github/webhook")

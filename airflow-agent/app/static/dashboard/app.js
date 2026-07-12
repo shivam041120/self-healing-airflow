@@ -259,6 +259,7 @@ function renderStatCards(summary) {
   const cards = [
     { label: "Incidents", value: summary.total, cls: "" },
     { label: "Fixed", value: s["Fixed"] || 0, cls: "green" },
+    { label: "Pending PR review", value: s["Pending PR review"] || 0, cls: "blue" },
     { label: "Escalated", value: s["Escalated"] || 0, cls: "amber" },
     { label: "Unresolved", value: s["Unresolved"] || 0, cls: "red" },
     { label: "No action needed", value: s["No action needed"] || 0, cls: "" },

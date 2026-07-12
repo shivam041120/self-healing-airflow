@@ -19,6 +19,10 @@ NODE_LABELS = {
     "action": "Action",
     "verify": "Verify",
     "graph_crashed": "Crashed",
+    "python_specialist": "Propose fix",
+    "critic": "Review fix",
+    "open_pr": "Open PR",
+    "retry_after_merge": "Retry after merge",
 }
 
 STATUS_FIXED = "fixed"
@@ -26,6 +30,7 @@ STATUS_ESCALATED = "escalated"
 STATUS_UNRESOLVED = "unresolved"
 STATUS_NO_ACTION = "no_action"
 STATUS_CRASHED = "crashed"
+STATUS_PENDING_REVIEW = "pending_review"
 
 STATUS_LABELS = {
     STATUS_FIXED: "Fixed",
@@ -33,6 +38,7 @@ STATUS_LABELS = {
     STATUS_UNRESOLVED: "Unresolved",
     STATUS_NO_ACTION: "No action needed",
     STATUS_CRASHED: "Crashed",
+    STATUS_PENDING_REVIEW: "Pending PR review",
 }
 
 
@@ -85,7 +91,17 @@ def _compute_status_and_fix(rows):
     else:
         last = rows[-1]
         last_action = (last.get("action_decision") or "").upper()
-        if "ESCALATE" in last_action or last["node"] == "analyze_error":
+        if last["node"] == "open_pr" and last_action == "PR_OPENED":
+            # A PR is open and awaiting a human merge/close — this is an
+            # active, in-progress state, not "nothing to do here" and not
+            # "stuck/needs escalation" either. It gets its own status so
+            # it can't be mistaken for either.
+            status = STATUS_PENDING_REVIEW
+        elif "ESCALATE" in last_action or last["node"] == "analyze_error" or last_action == "REJECTED":
+            # REJECTED covers critic_node explicitly giving up on a
+            # proposed fix (see critic_node.py) — documented as
+            # "escalate to a human instead of opening a PR", so it
+            # belongs here, not in the no_action fallback.
             status = STATUS_ESCALATED
         elif last["node"] == "verify" and last.get("verification_result") is False:
             status = STATUS_UNRESOLVED

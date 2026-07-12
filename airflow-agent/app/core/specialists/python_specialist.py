@@ -37,7 +37,13 @@ class ProposedFix(BaseModel):
 async def python_specialist_node(state: dict):
     dag_id, task_id, dag_run_id = state["dag_id"], state["task_id"], state["dag_run_id"]
     logs = state.get("logs", "")
-    revision_count = state.get("revision_count", 0)
+    # A "revision pass" is specifically a call triggered by the critic's
+    # "revise" verdict — not just "any call after the first". Gating on
+    # that (rather than incrementing unconditionally) is what lets the
+    # cap in critic_node actually work: the ORIGINAL attempt must not
+    # count against the revision budget.
+    is_revision = state.get("critic_verdict") == "revise"
+    revision_count = state.get("revision_count", 0) + (1 if is_revision else 0)
 
     fileloc = get_dag_fileloc(dag_id)
     if not fileloc:
@@ -54,7 +60,7 @@ async def python_specialist_node(state: dict):
     # On a revision pass, include the critic's concerns and the previous
     # attempt so the model doesn't just regenerate the same fix.
     critic_feedback = ""
-    if revision_count > 0 and state.get("critic_concerns"):
+    if is_revision and state.get("critic_concerns"):
         critic_feedback = (
             f"\n\nA previous proposed fix was reviewed and sent back for revision. "
             f"Reviewer's concerns:\n{state['critic_concerns']}\n\n"
@@ -88,7 +94,7 @@ async def python_specialist_node(state: dict):
         "original_content": original_content,
         "proposed_fix": fix.corrected_content,
         "fix_summary": fix.summary,
-        "revision_count": revision_count + (1 if revision_count > 0 else 0),
+        "revision_count": revision_count,
     }
 
 
