@@ -18,11 +18,18 @@ def _flatten_structured_log(raw: str) -> str:
     punctuation and boilerplate (group markers, timestamps, logger names),
     with no line breaks for a small model — or a regex — to anchor on.
 
-    Flattens it into one human-readable line per event when the response
-    matches this shape. Falls through unchanged for anything else (a
-    plain-text log response, an error string, a different Airflow
-    version's format), so this never turns a working plain-text path into
-    a broken one.
+    Critically, the actual exception is NOT in the generic "event" text
+    ("Task failed with exception") — it's under a separate "error_detail"
+    field: a list of {exc_type, exc_value, frames: [{filename, lineno,
+    name}, ...]} (a list because Python exception chains — __cause__/
+    __context__ — can nest more than one). Without reading this, the
+    flattened log has all the boilerplate but never the actual error.
+
+    Flattens both into one human-readable line per event/exception when
+    the response matches this shape. Falls through unchanged for anything
+    else (plain-text log, error string, different Airflow version's
+    format), so this never turns a working plain-text path into a broken
+    one.
     """
     try:
         data = json.loads(raw)
@@ -35,10 +42,29 @@ def _flatten_structured_log(raw: str) -> str:
 
     lines = []
     for entry in content:
-        if isinstance(entry, dict) and "event" in entry:
-            lines.append(str(entry["event"]))
-        elif isinstance(entry, str):
+        if isinstance(entry, str):
             lines.append(entry)
+            continue
+        if not isinstance(entry, dict):
+            continue
+
+        if "event" in entry:
+            lines.append(str(entry["event"]))
+
+        for exc in entry.get("error_detail") or []:
+            if not isinstance(exc, dict):
+                continue
+            exc_type = exc.get("exc_type", "Exception")
+            exc_value = exc.get("exc_value", "")
+            # Unindented "ExceptionType: message" — matches the same
+            # shape a plain-text traceback ends with, so the existing
+            # SQL/Python code-bug regexes in agent.py match it correctly.
+            lines.append(f"{exc_type}: {exc_value}")
+            for frame in exc.get("frames") or []:
+                lines.append(
+                    f"  at {frame.get('filename', '?')}:{frame.get('lineno', '?')} "
+                    f"in {frame.get('name', '?')}"
+                )
 
     return "\n".join(lines) if lines else raw
 
