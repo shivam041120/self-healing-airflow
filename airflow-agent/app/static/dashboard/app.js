@@ -13,11 +13,13 @@ const NODE_GROUP = {
   analyze_error: "analyze",
   diagnose: "diagnose",
   python_specialist: "specialist",
+  code_specialist: "specialist",
   critic: "critic",
   open_pr: "open_pr",
   retry_after_merge: "action",
   action: "action",
   verify: "verify",
+  escalate_after_retry: "verify",
   graph_crashed: "crashed",
 };
 
@@ -43,17 +45,20 @@ const AGENT_INFO = {
   analyze_error: { label: "Router", key: "router", avatar: "R" },
   diagnose: { label: "Diagnose", key: "diagnose", avatar: "D" },
   python_specialist: { label: "Specialist", key: "specialist", avatar: "S" },
+  code_specialist: { label: "Specialist", key: "specialist", avatar: "S" },
   critic: { label: "Critic", key: "critic", avatar: "C" },
   open_pr: { label: "PR agent", key: "pr", avatar: "P" },
   retry_after_merge: { label: "Executor", key: "executor", avatar: "E" },
   action: { label: "Executor", key: "executor", avatar: "E" },
   verify: { label: "Verifier", key: "verifier", avatar: "V" },
+  escalate_after_retry: { label: "Escalation", key: "verifier", avatar: "!" },
   graph_crashed: { label: "System", key: "webhook", avatar: "!" },
 };
 
 
 let currentIncidents = [];
 let pipelineIdleTimer = null;
+let currentPipelineIncidentKey = null;
 
 function qs(id) { return document.getElementById(id); }
 
@@ -83,6 +88,38 @@ async function loadIncidents() {
   renderStatCards(data.summary);
   renderTable(data.incidents);
   populateFilterOptions(data.incidents);
+  await syncPipelineToLatestIncident();
+}
+
+// The pipeline rail and "Agent thinking" transcript were previously only
+// ever painted by live SSE events (see animatePipeline/appendThoughts
+// below) — nothing populated them from the initial REST fetch. That
+// meant a fresh page load, a manual refresh, or a filter change all left
+// the pipeline sitting in its default idle markup even when a recent
+// incident's data was sitting right there in currentIncidents, and it
+// would only catch up once the NEXT live event happened to arrive. This
+// closes that gap: called after every loadIncidents(), so every refresh
+// path (init, manual refresh, filter change, SSE reconnect) shows the
+// actual most-recent incident immediately, not just future ones.
+async function syncPipelineToLatestIncident() {
+  if (!currentIncidents.length) {
+    resetPipeline();
+    return;
+  }
+  const latest = currentIncidents[0]; // most-recently-active — see group_into_incidents
+  const key = `${latest.dag_id}|${latest.task_id}|${latest.dag_run_id}`;
+  if (key === currentPipelineIncidentKey) return; // already showing this one
+
+  try {
+    const res = await fetch(
+      `/api/incidents/${encodeURIComponent(latest.dag_id)}/${encodeURIComponent(latest.task_id)}/${encodeURIComponent(latest.dag_run_id)}`
+    );
+    const incident = await res.json();
+    if (incident.error) return;
+    animatePipeline(incident); // also updates the thinking transcript
+  } catch (e) {
+    console.error("[pipeline] failed to sync to latest incident", e);
+  }
 }
 
 async function loadStats() {
@@ -447,6 +484,7 @@ function resetPipeline() {
 
 function animatePipeline(incident) {
   clearTimeout(pipelineIdleTimer);
+  currentPipelineIncidentKey = `${incident.dag_id}|${incident.task_id}|${incident.dag_run_id}`;
   const lastRow = incident.rows[incident.rows.length - 1];
   const group = NODE_GROUP[lastRow.node] || "webhook_received";
 
@@ -463,7 +501,6 @@ function animatePipeline(incident) {
   if (group === "crashed") {
     document.querySelectorAll(".pipeline-node").forEach((n) => n.classList.add("error"));
     document.querySelectorAll(".pipeline-branch").forEach((b) => b.classList.add("dim"));
-    scheduleIdleReset();
     return;
   }
 
@@ -517,7 +554,6 @@ function animatePipeline(incident) {
   }
 
   appendThoughts(incident);
-  scheduleIdleReset();
 }
 
 // --- Agent thinking transcript ---------------------------------------
@@ -593,10 +629,10 @@ function appendThoughts(incident) {
   body.scrollTop = body.scrollHeight;
 }
 
-function scheduleIdleReset() {
-  clearTimeout(pipelineIdleTimer);
-  pipelineIdleTimer = setTimeout(resetPipeline, 9000);
-}
+// Deliberately no auto-reset-to-idle here: the rail should keep showing
+// the last incident's final state (fixed/escalated/whatever) until a
+// genuinely new incident's first event arrives — see animatePipeline,
+// which repaints the whole rail from scratch on every call regardless.
 
 // The agent can write many decision rows per incident (each node, each
 // retry loop), and each write fires an SSE event. Reacting to every event
@@ -646,11 +682,32 @@ function scheduleDebouncedRefresh() {
   }, DEBOUNCE_MS);
 }
 
+// Both the SSE connection dropping-and-reconnecting and a backgrounded
+// browser tab (which throttles setTimeout, so the debounced refresh above
+// can stall for a long time while the tab isn't visible) can leave the
+// page showing stale data with no further errors — nothing left to
+// signal "you're out of date". A full reload on (re)connect and on the
+// tab regaining focus is a cheap way to self-heal from both without
+// requiring a manual page refresh.
+let fullRefreshInFlight = null;
+function fullRefresh() {
+  if (fullRefreshInFlight) return fullRefreshInFlight;
+  fullRefreshInFlight = Promise.allSettled([
+    loadIncidents(),
+    loadStats(),
+    loadHeatmap(),
+  ]).finally(() => { fullRefreshInFlight = null; });
+  return fullRefreshInFlight;
+}
+
 function connectStream() {
   const indicator = qs("live-indicator");
   const source = new EventSource("/api/stream");
 
-  source.onopen = () => indicator?.classList.remove("offline");
+  source.onopen = () => {
+    indicator?.classList.remove("offline");
+    fullRefresh().catch((e) => console.error("[stream] reconnect refresh failed", e));
+  };
   source.onerror = () => indicator?.classList.add("offline");
 
   source.addEventListener("incident_update", (e) => {
@@ -665,6 +722,12 @@ function connectStream() {
     scheduleDebouncedRefresh();
   });
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    fullRefresh().catch((e) => console.error("[visibility] refresh failed", e));
+  }
+});
 
 // Runs each init step independently — one failing (missing element,
 // failed fetch, whatever) no longer takes the rest of the app down with

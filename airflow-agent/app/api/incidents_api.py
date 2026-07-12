@@ -98,4 +98,16 @@ async def stream():
             await conn.remove_listener(NOTIFY_CHANNEL, _on_notify)
             await conn.close()
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            # Without these, some proxies/browsers buffer the stream and
+            # only flush it in chunks — which looks exactly like "the
+            # live dashboard doesn't update until I refresh", even though
+            # the server is actually yielding events immediately.
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
