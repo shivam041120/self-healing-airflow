@@ -199,6 +199,7 @@ def get_task_instance_state(dag_id: str, dag_run_id: str, task_id: str) -> Optio
         return None
 
     if response.status_code == 200:
+        
         return response.json().get("state")
     print(f"[airflow_api] Could not fetch task state (status {response.status_code}): {response.text}")
     return None
