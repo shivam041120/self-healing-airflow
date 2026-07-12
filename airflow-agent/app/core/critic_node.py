@@ -27,12 +27,21 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "phi4-mini")
 
 class CriticVerdict(BaseModel):
     verdict: Literal["approved", "revise", "rejected"] = Field(
-        description="approved: the fix looks correct and addresses the root cause. "
-                     "revise: fixable but has a real problem — explain it in concerns. "
-                     "rejected: fundamentally wrong approach, more revision won't help; "
-                     "a human should look at this instead."
+        description="approved: the fix directly addresses the exact error in the failure log, "
+                     "and doesn't touch code unrelated to that error. This is the default for a "
+                     "small, targeted change — approve it even if a more elegant fix exists. "
+                     "revise: has a SPECIFIC, concrete problem you can name — e.g. it still "
+                     "references the same missing key/attribute, it introduces a real syntax "
+                     "error, it changes behavior for inputs the log never showed failing. "
+                     "'could be improved' or 'might have other issues' is not concrete enough — "
+                     "if you can't name an actual problem with actual evidence, approve instead. "
+                     "rejected: the fix doesn't address the root cause at all, or revise was "
+                     "already used once — a human should look at this instead."
     )
-    concerns: str = Field(description="What's wrong (if revise/rejected), or a brief confirmation (if approved).")
+    concerns: str = Field(
+        description="If revise/rejected: the SPECIFIC problem, in one sentence, referencing "
+                     "exactly what's wrong. If approved: a brief one-sentence confirmation."
+    )
 
 
 async def critic_node(state: dict):
@@ -50,15 +59,21 @@ async def critic_node(state: dict):
         return {"critic_verdict": "rejected"}
 
     prompt = (
-        f"A specialist proposed a fix for this Airflow task failure. Review it critically — "
-        f"your job is to catch a bad fix before it reaches a human as a pull request, not to "
-        f"be agreeable.\n\n"
+        f"A specialist proposed a fix for this Airflow task failure. Your job is narrow: "
+        f"catch a fix that's actually wrong before it reaches a human as a pull request — "
+        f"NOT to hold out for the most elegant or defensive version of the fix. A small, "
+        f"targeted change that directly resolves the exact error below should be approved, "
+        f"even if you can imagine a more thorough version.\n\n"
         f"Failure log:\n{state.get('logs', '')}\n\n"
         f"Original file:\n```python\n{state.get('original_content', '')}\n```\n\n"
         f"Proposed fix:\n```python\n{state['proposed_fix']}\n```\n\n"
         f"Specialist's own summary of the change: {state.get('fix_summary', '')}\n\n"
-        f"Does this actually address the root cause shown in the log, without introducing "
-        f"an obvious new problem or silently changing unrelated behavior?"
+        f"Two questions only:\n"
+        f"1. Does the proposed fix eliminate the exact error shown in the failure log above?\n"
+        f"2. Does it change any code NOT related to that error?\n"
+        f"If (1) is yes and (2) is no, approve it. Only choose revise/rejected if you can "
+        f"point to a specific line that's still broken or a specific unrelated change — "
+        f"not a general sense that more could be done."
     )
 
     try:
