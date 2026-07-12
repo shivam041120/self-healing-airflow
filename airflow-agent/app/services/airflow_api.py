@@ -110,6 +110,9 @@ def get_dag_fileloc(dag_id: str) -> Optional[str]:
         return response.json().get("fileloc")
     print(f"[airflow_api] Could not fetch DAG fileloc (status {response.status_code}): {response.text}")
     return None
+
+
+def get_task_instance_state(dag_id: str, dag_run_id: str, task_id: str) -> Optional[str]:
     """
     Reads back a task instance's current state (e.g. 'success', 'failed',
     'running', 'queued'). Used by verify_node to check whether a RETRY
