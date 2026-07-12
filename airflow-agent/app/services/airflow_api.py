@@ -83,7 +83,33 @@ def clear_task_instance(dag_id: str, dag_run_id: str, task_id: str) -> dict:
     return {"error": f"Could not clear task (status {response.status_code}): {response.text}"}
 
 
-def get_task_instance_state(dag_id: str, dag_run_id: str, task_id: str) -> Optional[str]:
+def get_dag_fileloc(dag_id: str) -> Optional[str]:
+    """
+    Returns the DAG's source file path as Airflow itself sees it (e.g.
+    '/opt/airflow/dags/dag_syntax_error_sql.py'). Used by the code-fix
+    flow to find which file in the repo actually needs patching, instead
+    of hardcoding a task_id -> filename table that would silently go
+    stale the moment DAG files get renamed or split.
+    """
+    try:
+        token = get_auth_token()
+    except Exception as e:
+        print(f"[airflow_api] Could not authenticate to read DAG fileloc: {e}")
+        return None
+
+    url = f"{AIRFLOW_URL}/api/v2/dags/{dag_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        response = httpx.get(url, headers=headers, timeout=15)
+    except Exception as e:
+        print(f"[airflow_api] Could not reach Airflow API for DAG fileloc: {e}")
+        return None
+
+    if response.status_code == 200:
+        return response.json().get("fileloc")
+    print(f"[airflow_api] Could not fetch DAG fileloc (status {response.status_code}): {response.text}")
+    return None
     """
     Reads back a task instance's current state (e.g. 'success', 'failed',
     'running', 'queued'). Used by verify_node to check whether a RETRY

@@ -12,12 +12,45 @@ const NODE_GROUP = {
   analyze: "analyze",
   analyze_error: "analyze",
   diagnose: "diagnose",
+  python_specialist: "specialist",
+  critic: "critic",
+  open_pr: "open_pr",
+  retry_after_merge: "action",
   action: "action",
   verify: "verify",
   graph_crashed: "crashed",
 };
 
-const GROUP_ORDER = ["webhook_received", "analyze", "diagnose", "action", "verify"];
+const TRUNK_ORDER = ["webhook_received", "analyze", "diagnose"];
+const BRANCH_ORDER = {
+  codefix: ["specialist", "critic", "open_pr"],
+  retry: ["action", "verify"],
+};
+function branchFor(group) {
+  if (BRANCH_ORDER.codefix.includes(group)) return "codefix";
+  if (BRANCH_ORDER.retry.includes(group)) return "retry";
+  return null;
+}
+
+// Agent identity used by the "Agent thinking" transcript — separate from
+// NODE_GROUP because a couple of raw node names map to the same visible
+// agent (analyze_start/analyze/analyze_error are all "Router" mid-thought
+// vs. done thinking) in a way the pipeline dots don't need to distinguish.
+const AGENT_INFO = {
+  webhook_received: { label: "Webhook", key: "webhook", avatar: "W" },
+  analyze_start: { label: "Router", key: "router", avatar: "R" },
+  analyze: { label: "Router", key: "router", avatar: "R" },
+  analyze_error: { label: "Router", key: "router", avatar: "R" },
+  diagnose: { label: "Diagnose", key: "diagnose", avatar: "D" },
+  python_specialist: { label: "Specialist", key: "specialist", avatar: "S" },
+  critic: { label: "Critic", key: "critic", avatar: "C" },
+  open_pr: { label: "PR agent", key: "pr", avatar: "P" },
+  retry_after_merge: { label: "Executor", key: "executor", avatar: "E" },
+  action: { label: "Executor", key: "executor", avatar: "E" },
+  verify: { label: "Verifier", key: "verifier", avatar: "V" },
+  graph_crashed: { label: "System", key: "webhook", avatar: "!" },
+};
+
 
 let currentIncidents = [];
 let pipelineIdleTimer = null;
@@ -403,6 +436,7 @@ function showToast(msg) {
 function resetPipeline() {
   document.querySelectorAll(".pipeline-node").forEach((n) => n.classList.remove("active", "done", "success", "warning", "error"));
   document.querySelectorAll(".pipeline-arrow").forEach((a) => a.classList.remove("lit"));
+  document.querySelectorAll(".pipeline-branch").forEach((b) => b.classList.remove("dim", "taken"));
   const caption = qs("pipeline-caption");
   if (caption) {
     caption.textContent = "No incident in flight — the rail lights up the moment a task fails.";
@@ -423,36 +457,139 @@ function animatePipeline(incident) {
 
   document.querySelectorAll(".pipeline-node").forEach((n) => n.classList.remove("active", "done", "success", "warning", "error"));
   document.querySelectorAll(".pipeline-arrow").forEach((a) => a.classList.remove("lit"));
+  document.querySelectorAll(".pipeline-branch").forEach((b) => b.classList.remove("dim", "taken"));
 
   if (group === "crashed") {
     document.querySelectorAll(".pipeline-node").forEach((n) => n.classList.add("error"));
+    document.querySelectorAll(".pipeline-branch").forEach((b) => b.classList.add("dim"));
     scheduleIdleReset();
     return;
   }
 
-  const idx = GROUP_ORDER.indexOf(group);
-  GROUP_ORDER.forEach((g, i) => {
-    const node = document.querySelector(`.pipeline-node[data-group="${g}"]`);
-    if (!node) return;
-    if (i < idx) node.classList.add("done");
-  });
-  document.querySelectorAll(".pipeline-arrow").forEach((a, i) => {
-    if (i < idx) a.classList.add("lit");
-  });
+  const nodeEl = (g) => document.querySelector(`.pipeline-node[data-group="${g}"]`);
+  const arrowsIn = (container) => Array.from(container.querySelectorAll(".pipeline-arrow"));
 
-  const activeNode = document.querySelector(`.pipeline-node[data-group="${group}"]`);
-  if (activeNode) {
-    if (group === "verify") {
-      activeNode.classList.add(incident.status === "fixed" ? "success" : "error");
-      document.querySelectorAll(".pipeline-arrow").forEach((a) => a.classList.add("lit"));
-    } else if (lastRow.node === "analyze_error") {
-      activeNode.classList.add("warning");
-    } else {
-      activeNode.classList.add("active");
+  const trunkEl = document.querySelector(".pipeline-trunk");
+  const trunkIdx = TRUNK_ORDER.indexOf(group);
+  const branchKey = branchFor(group);
+
+  if (trunkIdx !== -1) {
+    // Still in the shared prefix (webhook/router/diagnose) — no branch
+    // decided yet, so both stay dim.
+    TRUNK_ORDER.forEach((g, i) => { if (i < trunkIdx) nodeEl(g)?.classList.add("done"); });
+    arrowsIn(trunkEl).forEach((a, i) => { if (i < trunkIdx) a.classList.add("lit"); });
+    const active = nodeEl(group);
+    if (active) active.classList.add(lastRow.node === "analyze_error" ? "warning" : "active");
+    document.querySelectorAll(".pipeline-branch").forEach((b) => b.classList.add("dim"));
+  } else if (branchKey) {
+    // Fully past the trunk — light it all, then show which branch got taken.
+    TRUNK_ORDER.forEach((g) => nodeEl(g)?.classList.add("done"));
+    arrowsIn(trunkEl).forEach((a) => a.classList.add("lit"));
+
+    document.querySelectorAll(".pipeline-branch").forEach((b) => {
+      b.classList.add(b.dataset.branch === branchKey ? "taken" : "dim");
+    });
+
+    const order = BRANCH_ORDER[branchKey];
+    const idx = order.indexOf(group);
+    const branchEl = document.querySelector(`.pipeline-branch[data-branch="${branchKey}"]`);
+    order.forEach((g, i) => { if (i < idx) nodeEl(g)?.classList.add("done"); });
+    arrowsIn(branchEl).forEach((a, i) => { if (i < idx) a.classList.add("lit"); });
+
+    const active = nodeEl(group);
+    if (active) {
+      if (group === "verify") {
+        active.classList.add(incident.status === "fixed" ? "success" : "error");
+        arrowsIn(branchEl).forEach((a) => a.classList.add("lit"));
+      } else if (group === "critic") {
+        if (lastRow.action_decision === "rejected") active.classList.add("error");
+        else if (lastRow.action_decision === "approved") active.classList.add("success");
+        else active.classList.add("active"); // "revise" or still deciding
+      } else if (group === "open_pr") {
+        active.classList.add(lastRow.action_decision === "PR_OPENED" ? "success" : "error");
+      } else if (group === "specialist" && lastRow.action_decision === "ESCALATE") {
+        active.classList.add("warning");
+      } else {
+        active.classList.add("active");
+      }
     }
   }
 
+  appendThoughts(incident);
   scheduleIdleReset();
+}
+
+// --- Agent thinking transcript ---------------------------------------
+// A persistent, step-by-step log of every decision row as it arrives —
+// deliberately separate from the debounce-coalesced pipeline redraw
+// above: that one only cares about the LATEST row (what state is the
+// rail in right now), this one wants to show EVERY row in order, since
+// the whole point is watching each agent's reasoning appear in sequence.
+const renderedThoughtKeys = new Set();
+let currentThinkingIncidentKey = null;
+const MAX_THOUGHT_ENTRIES = 60;
+
+function thoughtRowKey(incident, row) {
+  return `${incident.dag_id}|${incident.task_id}|${incident.dag_run_id}|${row.node}|${row.attempt}|${row.created_at}`;
+}
+
+function appendThoughts(incident) {
+  const body = qs("thinking-body");
+  if (!body) return;
+
+  const incidentKey = `${incident.dag_id}|${incident.task_id}|${incident.dag_run_id}`;
+  if (incidentKey !== currentThinkingIncidentKey) {
+    // A different incident than whatever the transcript was showing —
+    // start fresh rather than interleaving two incidents' reasoning.
+    currentThinkingIncidentKey = incidentKey;
+    renderedThoughtKeys.clear();
+    body.innerHTML = "";
+  }
+
+  const emptyState = qs("thinking-empty");
+  const meta = qs("thinking-meta");
+
+  for (const row of incident.rows) {
+    const key = thoughtRowKey(incident, row);
+    if (renderedThoughtKeys.has(key)) continue;
+    renderedThoughtKeys.add(key);
+
+    emptyState?.remove();
+    const info = AGENT_INFO[row.node] || { label: row.node, key: "webhook", avatar: "?" };
+
+    const metaBits = [];
+    if (row.action_decision) metaBits.push(`decision: <b>${escapeHtml(row.action_decision)}</b>`);
+    if (row.verification_result !== null && row.verification_result !== undefined) {
+      metaBits.push(`verified: <b>${row.verification_result ? "yes" : "no"}</b>`);
+    }
+    if (row.attempt !== null && row.attempt !== undefined) metaBits.push(`attempt ${row.attempt}`);
+
+    const entry = document.createElement("div");
+    entry.className = "thought-entry";
+    entry.dataset.agent = info.key;
+    entry.innerHTML = `
+      <div class="thought-avatar">${info.avatar}</div>
+      <div class="thought-content">
+        <span class="thought-agent-name">${info.label}</span>
+        <span class="thought-time">${fmtTime(row.created_at)}</span>
+        <div class="thought-text">${
+          row.reasoning
+            ? escapeHtml(row.reasoning)
+            : `<span class="thought-typing"><span></span><span></span><span></span></span>`
+        }</div>
+        ${metaBits.length ? `<div class="thought-meta">${metaBits.join(" · ")}</div>` : ""}
+      </div>
+    `;
+    body.appendChild(entry);
+
+    if (renderedThoughtKeys.size > MAX_THOUGHT_ENTRIES) {
+      const first = body.querySelector(".thought-entry");
+      first?.remove();
+    }
+  }
+
+  if (meta) meta.textContent = `watching ${incident.dag_id} / ${incident.task_id}…`;
+  body.scrollTop = body.scrollHeight;
 }
 
 function scheduleIdleReset() {

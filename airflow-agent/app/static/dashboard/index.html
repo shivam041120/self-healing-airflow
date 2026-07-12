@@ -64,11 +64,11 @@
       <section id="panel-live" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-live">
         <div class="pipeline-card" id="pipeline-card">
           <div class="pipeline-header">
-            <span class="pipeline-title">Current run</span>
+            <span class="pipeline-title">Agents at work</span>
             <span class="pipeline-caption" id="pipeline-caption">No incident in flight — the rail lights up the moment a task fails.</span>
           </div>
           <div class="pipeline-flow" id="pipeline-flow">
-            <div class="pipeline-rail">
+            <div class="pipeline-rail pipeline-trunk">
               <div class="pipeline-node" data-group="webhook_received">
                 <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
                 <div class="pipeline-node-label">Webhook</div>
@@ -76,23 +76,63 @@
               <div class="pipeline-arrow"><span class="pipeline-packet"></span></div>
               <div class="pipeline-node" data-group="analyze">
                 <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
-                <div class="pipeline-node-label">Analyze</div>
+                <div class="pipeline-node-label">Router</div>
               </div>
               <div class="pipeline-arrow"><span class="pipeline-packet"></span></div>
               <div class="pipeline-node" data-group="diagnose">
                 <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
                 <div class="pipeline-node-label">Diagnose</div>
               </div>
-              <div class="pipeline-arrow"><span class="pipeline-packet"></span></div>
-              <div class="pipeline-node" data-group="action">
-                <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
-                <div class="pipeline-node-label">Action</div>
+            </div>
+
+            <div class="pipeline-fork">
+              <div class="pipeline-branch" data-branch="codefix">
+                <div class="pipeline-branch-label">Code-fix path</div>
+                <div class="pipeline-rail">
+                  <div class="pipeline-node" data-group="specialist">
+                    <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
+                    <div class="pipeline-node-label">Specialist</div>
+                  </div>
+                  <div class="pipeline-arrow"><span class="pipeline-packet"></span></div>
+                  <div class="pipeline-node" data-group="critic">
+                    <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
+                    <div class="pipeline-node-label">Critic</div>
+                  </div>
+                  <div class="pipeline-arrow"><span class="pipeline-packet"></span></div>
+                  <div class="pipeline-node" data-group="open_pr">
+                    <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
+                    <div class="pipeline-node-label">Open PR</div>
+                  </div>
+                </div>
               </div>
-              <div class="pipeline-arrow"><span class="pipeline-packet"></span></div>
-              <div class="pipeline-node" data-group="verify">
-                <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
-                <div class="pipeline-node-label">Verify</div>
+
+              <div class="pipeline-branch" data-branch="retry">
+                <div class="pipeline-branch-label">Retry path</div>
+                <div class="pipeline-rail">
+                  <div class="pipeline-node" data-group="action">
+                    <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
+                    <div class="pipeline-node-label">Executor</div>
+                  </div>
+                  <div class="pipeline-arrow"><span class="pipeline-packet"></span></div>
+                  <div class="pipeline-node" data-group="verify">
+                    <div class="pipeline-node-dot"><span class="pipeline-node-core"></span></div>
+                    <div class="pipeline-node-label">Verifier</div>
+                  </div>
+                </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="thinking-card">
+          <div class="feed-header">
+            <span class="pipeline-title">Agent thinking</span>
+            <span class="feed-meta" id="thinking-meta">watching for the next failure…</span>
+          </div>
+          <div class="thinking-body" id="thinking-body">
+            <div class="feed-empty" id="thinking-empty">
+              <span class="feed-radar" aria-hidden="true"></span>
+              Nothing to show yet. Each agent's reasoning appears here, step by step, the moment it decides something.
             </div>
           </div>
         </div>

@@ -77,6 +77,54 @@ async def init_db():
             );
             """
         )
+        # Tracks PRs the agent opened for code-shaped fixes. This is what
+        # makes "retry exactly once, only after the PR is merged" possible
+        # — without it, a merged-PR webhook would have no way to know
+        # which incident (dag/task/run) it corresponds to.
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_fix_prs (
+                pr_number INTEGER PRIMARY KEY,
+                pr_url TEXT NOT NULL,
+                dag_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                dag_run_id TEXT NOT NULL,
+                repo_path TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                resolved_at TIMESTAMPTZ
+            );
+            """
+        )
+
+
+async def create_pending_pr(pr_number: int, pr_url: str, dag_id: str, task_id: str, dag_run_id: str, repo_path: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO pending_fix_prs (pr_number, pr_url, dag_id, task_id, dag_run_id, repo_path)
+            VALUES ($1,$2,$3,$4,$5,$6)
+            ON CONFLICT (pr_number) DO NOTHING
+            """,
+            pr_number, pr_url, dag_id, task_id, dag_run_id, repo_path,
+        )
+
+
+async def get_pending_pr(pr_number: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM pending_fix_prs WHERE pr_number = $1", pr_number)
+        return dict(row) if row else None
+
+
+async def mark_pr_status(pr_number: int, status: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE pending_fix_prs SET status = $1, resolved_at = now() WHERE pr_number = $2",
+            status, pr_number,
+        )
 
 
 async def log_decision(

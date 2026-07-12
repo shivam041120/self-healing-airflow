@@ -131,6 +131,98 @@ body {
 .filter-bar { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
 .filter-bar .filter-group { min-width: 140px; }
 
+.pipeline-fork {
+  display: flex; gap: 28px; margin-top: 8px; flex-wrap: wrap;
+}
+.pipeline-branch {
+  flex: 1; min-width: 220px; padding: 10px 4px 0 4px; border-radius: 10px;
+  transition: opacity 0.4s ease, filter 0.4s ease;
+}
+.pipeline-branch-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-faint); margin-bottom: 4px; padding-left: 4px;
+}
+.pipeline-branch.dim { opacity: 0.32; filter: grayscale(0.6); }
+.pipeline-branch.taken { opacity: 1; filter: none; }
+.pipeline-branch .pipeline-flow { padding: 6px 8px 20px 8px; }
+
+/* Per-agent identity colors, reusing the same palette as the event
+   timeline chips so an agent's color means the same thing everywhere
+   in the console, not just on this card. */
+.pipeline-node[data-group="analyze"].active .pipeline-node-dot,
+.pipeline-node[data-group="analyze"].done .pipeline-node-dot { background: var(--blue); border-color: var(--blue); color: var(--blue); }
+.pipeline-node[data-group="diagnose"].active .pipeline-node-dot,
+.pipeline-node[data-group="diagnose"].done .pipeline-node-dot,
+.pipeline-node[data-group="specialist"].active .pipeline-node-dot,
+.pipeline-node[data-group="specialist"].done .pipeline-node-dot { background: var(--purple); border-color: var(--purple); color: var(--purple); }
+.pipeline-node[data-group="critic"].active .pipeline-node-dot,
+.pipeline-node[data-group="critic"].done .pipeline-node-dot { background: var(--amber); border-color: var(--amber); color: var(--amber); }
+.pipeline-node[data-group="open_pr"].active .pipeline-node-dot,
+.pipeline-node[data-group="open_pr"].done .pipeline-node-dot,
+.pipeline-node[data-group="open_pr"].success .pipeline-node-dot { background: var(--green); border-color: var(--green); color: var(--green); }
+
+.thinking-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 20px; margin-bottom: 16px; box-shadow: var(--shadow);
+}
+.thinking-body {
+  max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  perspective: 700px;
+}
+.thought-entry {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 8px;
+  background: var(--gray-bg); border-left: 3px solid var(--border);
+  animation: thought-in 0.45s cubic-bezier(.2,.8,.2,1) both;
+  transform-style: preserve-3d;
+}
+.thought-entry[data-agent="router"] { border-left-color: var(--blue); }
+.thought-entry[data-agent="diagnose"], .thought-entry[data-agent="specialist"] { border-left-color: var(--purple); }
+.thought-entry[data-agent="critic"] { border-left-color: var(--amber); }
+.thought-entry[data-agent="pr"] { border-left-color: var(--green); }
+.thought-entry[data-agent="executor"] { border-left-color: var(--amber); }
+.thought-entry[data-agent="verifier"] { border-left-color: var(--green); }
+.thought-entry[data-agent="webhook"] { border-left-color: var(--gray); }
+
+.thought-avatar {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center;
+  justify-content: center; font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase;
+  background: var(--gray);
+}
+.thought-entry[data-agent="router"] .thought-avatar { background: var(--blue); }
+.thought-entry[data-agent="diagnose"] .thought-avatar,
+.thought-entry[data-agent="specialist"] .thought-avatar { background: var(--purple); }
+.thought-entry[data-agent="critic"] .thought-avatar { background: var(--amber); }
+.thought-entry[data-agent="pr"] .thought-avatar { background: var(--green); }
+.thought-entry[data-agent="executor"] .thought-avatar { background: var(--amber); }
+.thought-entry[data-agent="verifier"] .thought-avatar { background: var(--green); }
+
+.thought-content { flex: 1; min-width: 0; }
+.thought-agent-name { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.thought-time { font-size: 11px; color: var(--text-faint); margin-left: 6px; font-weight: 400; }
+.thought-text { font-size: 13px; color: var(--text-muted); margin-top: 2px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.thought-meta { font-size: 11.5px; color: var(--text-faint); margin-top: 3px; }
+
+.thought-typing { display: inline-flex; gap: 3px; align-items: center; margin-top: 2px; }
+.thought-typing span {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--text-faint);
+  animation: typing-bounce 1s ease-in-out infinite;
+}
+.thought-typing span:nth-child(2) { animation-delay: 0.15s; }
+.thought-typing span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes thought-in {
+  0% { opacity: 0; transform: translateY(10px) translateZ(-30px) rotateX(-12deg); }
+  100% { opacity: 1; transform: translateY(0) translateZ(0) rotateX(0deg); }
+}
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thought-entry { animation: none; }
+  .thought-typing span { animation: none; }
+}
+
 .feed-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 16px 20px; box-shadow: var(--shadow);

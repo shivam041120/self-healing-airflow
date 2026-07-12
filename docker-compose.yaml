@@ -128,6 +128,15 @@ services:
       POSTGRES_DB: 'airflow'
       POSTGRES_USER: 'airflow'
       POSTGRES_PASSWORD: 'airflow'
+      # CODE_FIX path: python_specialist reads the failing DAG file and
+      # open_pr_node opens a PR against this repo. All three come from
+      # .env, not hardcoded here — GITHUB_TOKEN especially should never
+      # be committed. Leave GITHUB_TOKEN/GITHUB_REPO unset to disable the
+      # whole PR mechanism (it fails closed to ESCALATE, see open_pr_node.py).
+      GITHUB_TOKEN: '${GITHUB_TOKEN:-}'
+      GITHUB_REPO: '${GITHUB_REPO:-}'
+      GITHUB_BASE_BRANCH: '${GITHUB_BASE_BRANCH:-main}'
+      GITHUB_WEBHOOK_SECRET: '${GITHUB_WEBHOOK_SECRET:-}'
     depends_on:
       ollama:
         condition: service_started

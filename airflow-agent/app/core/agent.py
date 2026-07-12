@@ -8,6 +8,9 @@ from app.core.mcp_client import get_airflow_mcp_tools, find_tool
 from app.services.airflow_api import get_task_logs, clear_task_instance, get_task_instance_state
 from app.services.decision_log import log_decision
 from app.services.schema_healer import diagnose_and_heal
+from app.core.specialists.python_specialist import python_specialist_node
+from app.core.critic_node import critic_node
+from app.core.open_pr_node import open_pr_node
 
 # How long (seconds) to wait between polls, and how many polls, when
 # checking whether a cleared task instance finished after a RETRY.
@@ -29,11 +32,33 @@ class AgentState(TypedDict):
     reasoning: Optional[str]
     attempts: int
     is_fixed: bool
+    # --- multi-agent (CODE_FIX) fields, unused by the RETRY/ESCALATE path ---
+    repo_path: Optional[str]
+    original_content: Optional[str]
+    proposed_fix: Optional[str]
+    fix_summary: Optional[str]
+    revision_count: int
+    critic_verdict: Optional[str]
+    critic_concerns: Optional[str]
+    pr_url: Optional[str]
 
 
 # 2. Decision Schema for LLM
 class LLMDecision(BaseModel):
-    action: Literal["RETRY", "ESCALATE", "NONE"] = Field(description="Action to take")
+    action: Literal["RETRY", "ESCALATE", "CODE_FIX", "NONE"] = Field(
+        description=(
+            "RETRY: transient/infra failure, safe to just clear and re-run "
+            "(network blip, timeout, flaky dependency) — no code is wrong. "
+            "CODE_FIX: the failure is caused by wrong code (SQL syntax "
+            "error, wrong column/table reference, a Python bug in the DAG "
+            "file) — clearing and re-running would just fail identically; "
+            "the fix has to change the code itself. Routes to a dedicated "
+            "specialist agent, not handled directly here. "
+            "ESCALATE: needs a human decision the agent can't safely make "
+            "(auth/permissions, data correctness, ambiguous cause). "
+            "NONE: no action needed."
+        )
+    )
     reasoning: str = Field(description="Explanation for the choice")
 
 
@@ -89,7 +114,7 @@ async def analyze_node(state: AgentState):
         llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL).with_structured_output(LLMDecision)
         decision = llm.invoke(
             "Analyze this Airflow task failure log and decide the next action "
-            f"(RETRY, ESCALATE, or NONE):\n\n{logs}"
+            f"(RETRY, ESCALATE, CODE_FIX, or NONE):\n\n{logs}"
         )
         action = decision.action
         reasoning = decision.reasoning
@@ -263,18 +288,52 @@ async def verify_node(state: AgentState):
 
 # 4. Graph Construction
 builder = StateGraph(AgentState)
-builder.add_node("analyze", analyze_node)
-builder.add_node("diagnose", diagnose_node)
+builder.add_node("analyze", analyze_node)          # router
+builder.add_node("diagnose", diagnose_node)        # deterministic override for the missing-table shape
+builder.add_node("python_specialist", python_specialist_node)
+builder.add_node("critic", critic_node)
+builder.add_node("open_pr", open_pr_node)
 builder.add_node("action", action_node)
 builder.add_node("verify", verify_node)
 
 builder.add_edge(START, "analyze")
 builder.add_edge("analyze", "diagnose")
-builder.add_edge("diagnose", "action")
+
+# diagnose_node only overrides RETRY/ESCALATE for the schema-healer shape
+# (missing table) — it never produces CODE_FIX, so this is exactly the
+# router's original classification for anything code-shaped.
+builder.add_conditional_edges(
+    "diagnose",
+    lambda state: state["action_decision"],
+    {
+        "CODE_FIX": "python_specialist",
+        "RETRY": "action",
+        "ESCALATE": "action",
+        "NONE": "action",
+    },
+)
+
+builder.add_edge("python_specialist", "critic")
+
+
+def after_critic(state: AgentState):
+    verdict = state.get("critic_verdict")
+    if verdict == "approved":
+        return "open_pr"
+    if verdict == "revise":
+        return "python_specialist"
+    return END  # "rejected" — escalate, no PR opened
+
+
+builder.add_conditional_edges("critic", after_critic)
+builder.add_edge("open_pr", END)
+
 builder.add_edge("action", "verify")
 
 
-# Conditional Router
+# Conditional Router (unchanged — only the RETRY/ESCALATE/NONE branch
+# ever reaches verify; CODE_FIX exits through open_pr or the critic's
+# rejection instead)
 def should_continue(state: AgentState):
     if state["is_fixed"]:
         return END
