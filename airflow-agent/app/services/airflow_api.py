@@ -1,10 +1,46 @@
 import httpx
+import json
 import os
 from typing import Optional
 
 AIRFLOW_URL = os.getenv("AIRFLOW_URL", "http://airflow-apiserver:8080")
 AIRFLOW_USER = os.getenv("AIRFLOW_USER", "airflow")
 AIRFLOW_PASS = os.getenv("AIRFLOW_PASS", "airflow")
+
+
+def _flatten_structured_log(raw: str) -> str:
+    """
+    Airflow 3's task-log API returns structured JSON — a single-line blob
+    shaped like {"content": [{"event": "...", "timestamp": ..., ...}, ...]}
+    — not a plain-text traceback. Feeding that raw JSON straight to the
+    LLM (or to any regex expecting real line breaks, like the SQL/Python
+    code-bug detectors in agent.py) buries the actual exception in JSON
+    punctuation and boilerplate (group markers, timestamps, logger names),
+    with no line breaks for a small model — or a regex — to anchor on.
+
+    Flattens it into one human-readable line per event when the response
+    matches this shape. Falls through unchanged for anything else (a
+    plain-text log response, an error string, a different Airflow
+    version's format), so this never turns a working plain-text path into
+    a broken one.
+    """
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return raw
+
+    content = data.get("content") if isinstance(data, dict) else None
+    if not isinstance(content, list):
+        return raw
+
+    lines = []
+    for entry in content:
+        if isinstance(entry, dict) and "event" in entry:
+            lines.append(str(entry["event"]))
+        elif isinstance(entry, str):
+            lines.append(entry)
+
+    return "\n".join(lines) if lines else raw
 
 
 def get_auth_token() -> str:
@@ -44,7 +80,7 @@ def get_task_logs(dag_id: str, dag_run_id: str, task_id: str, try_number: int = 
         return f"Could not reach Airflow API: {e}"
 
     if response.status_code == 200:
-        return response.text
+        return _flatten_structured_log(response.text)
     return f"Could not fetch logs (status {response.status_code}): {response.text}"
 
 

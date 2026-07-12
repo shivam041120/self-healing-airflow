@@ -6,7 +6,7 @@ from langgraph.graph import StateGraph, END, START
 from pydantic import BaseModel, Field
 from langchain_ollama import ChatOllama
 from app.core.mcp_client import get_airflow_mcp_tools, find_tool
-from app.services.airflow_api import get_task_logs, clear_task_instance, get_task_instance_state
+from app.services.airflow_api import get_task_logs, clear_task_instance, get_task_instance_state, _flatten_structured_log
 from app.services.decision_log import log_decision
 from app.services.schema_healer import diagnose_and_heal
 from app.core.specialists.code_specialist import code_specialist_node
@@ -93,6 +93,21 @@ class LLMDecision(BaseModel):
 
 
 # 3. Nodes
+
+# Airflow logs (even flattened from JSON) can run to hundreds of lines of
+# setup/executor boilerplate before the actual traceback. A small local
+# model does better with a focused excerpt than the full firehose, and
+# the exception is essentially always at or near the end — so keep the
+# tail, not the head.
+LOG_TAIL_CHARS = int(os.getenv("LOG_TAIL_CHARS", "6000"))
+
+
+def _trim_log_for_llm(logs: str) -> str:
+    if len(logs) <= LOG_TAIL_CHARS:
+        return logs
+    return "...[earlier log lines omitted]...\n" + logs[-LOG_TAIL_CHARS:]
+
+
 async def _fetch_logs_via_mcp(state: AgentState) -> str:
     """
     Tries to fetch logs through the Airflow MCP server first (real tool use).
@@ -118,7 +133,9 @@ async def _fetch_logs_via_mcp(state: AgentState) -> str:
             if "validation error" in result_str.lower() or "is a required property" in result_str.lower():
                 print(f"[mcp] Log tool returned a tool-level error, using REST fallback: {result_str}")
             else:
-                return result_str
+                # Defensive: an MCP log tool could plausibly return the
+                # same structured-JSON shape Airflow's own REST API does.
+                return _flatten_structured_log(result_str)
         else:
             print("[mcp] No log-fetching tool found by keyword match; using REST fallback.")
     except Exception as e:
@@ -139,12 +156,13 @@ async def analyze_node(state: AgentState):
     )
 
     logs = await _fetch_logs_via_mcp(state)
+    llm_logs = _trim_log_for_llm(logs)
 
     try:
         llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL).with_structured_output(LLMDecision)
         decision = llm.invoke(
             "Analyze this Airflow task failure log and decide the next action "
-            f"(RETRY, ESCALATE, CODE_FIX, or NONE):\n\n{logs}"
+            f"(RETRY, ESCALATE, CODE_FIX, or NONE):\n\n{llm_logs}"
         )
         action = decision.action
         reasoning = decision.reasoning
@@ -434,5 +452,4 @@ def should_continue(state: AgentState):
 
 builder.add_conditional_edges("verify", should_continue)
 builder.add_edge("escalate_after_retry", END)
-
 agent_graph = builder.compile()
