@@ -25,6 +25,7 @@ NODE_LABELS = {
     "diagnose": "Diagnose",
     "action": "Action",
     "verify": "Verify",
+    "escalate_after_retry": "Escalated (retry didn't fix it)",
     "graph_crashed": "Crashed",
 }
 
@@ -36,6 +37,7 @@ NODE_COLORS = {
     "diagnose": "#7c3aed",
     "action": "#d97706",
     "verify": "#059669",
+    "escalate_after_retry": "#dc2626",
     "graph_crashed": "#dc2626",
 }
 

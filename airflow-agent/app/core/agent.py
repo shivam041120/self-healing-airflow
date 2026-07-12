@@ -16,6 +16,10 @@ from app.core.open_pr_node import open_pr_node
 # checking whether a cleared task instance finished after a RETRY.
 VERIFY_POLL_INTERVAL_SECONDS = float(os.getenv("VERIFY_POLL_INTERVAL_SECONDS", "3"))
 VERIFY_POLL_MAX_ATTEMPTS = int(os.getenv("VERIFY_POLL_MAX_ATTEMPTS", "10"))
+# One retry, not three: if a clear-and-rerun doesn't fix it the first time,
+# looping again is just repeating the same guess against a failure that's
+# probably not transient. Better to stop and hand it to a human.
+MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS", "1"))
 TERMINAL_STATES = {"success", "failed", "upstream_failed", "skipped"}
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -286,6 +290,26 @@ async def verify_node(state: AgentState):
     return {"is_fixed": success}
 
 
+async def escalate_after_retry_node(state: AgentState):
+    """
+    Reached only when the one retry we allow still didn't fix the task.
+    Logs a distinct, human-visible decision instead of just letting the
+    loop stop quietly — so this shows up as "Escalated" on the dashboard,
+    not "Unresolved" (which reads the same as "still in progress").
+    """
+    await log_decision(
+        dag_id=state["dag_id"],
+        task_id=state["task_id"],
+        dag_run_id=state["dag_run_id"],
+        node="escalate_after_retry",
+        attempt=state.get("attempts", 0),
+        reasoning="Retried once and the task is still failing — this doesn't "
+                   "look transient. Escalating instead of retrying again.",
+        action_decision="ESCALATE_AFTER_RETRY",
+    )
+    return {}
+
+
 # 4. Graph Construction
 builder = StateGraph(AgentState)
 builder.add_node("analyze", analyze_node)          # router
@@ -295,6 +319,7 @@ builder.add_node("critic", critic_node)
 builder.add_node("open_pr", open_pr_node)
 builder.add_node("action", action_node)
 builder.add_node("verify", verify_node)
+builder.add_node("escalate_after_retry", escalate_after_retry_node)
 
 builder.add_edge(START, "analyze")
 builder.add_edge("analyze", "diagnose")
@@ -331,9 +356,8 @@ builder.add_edge("open_pr", END)
 builder.add_edge("action", "verify")
 
 
-# Conditional Router (unchanged — only the RETRY/ESCALATE/NONE branch
-# ever reaches verify; CODE_FIX exits through open_pr or the critic's
-# rejection instead)
+# Conditional Router — only the RETRY/ESCALATE/NONE branch ever reaches
+# verify; CODE_FIX exits through open_pr or the critic's rejection instead.
 def should_continue(state: AgentState):
     if state["is_fixed"]:
         return END
@@ -342,10 +366,14 @@ def should_continue(state: AgentState):
     # and burn attempts for nothing. Only RETRY should loop.
     if state["action_decision"] != "RETRY":
         return END
-    if state["attempts"] >= 3:
-        return END
-    return "analyze"
+    if state["attempts"] < MAX_RETRY_ATTEMPTS:
+        return "analyze"
+    # The one retry we allow didn't fix it — a second identical guess
+    # isn't going to do better. Escalate explicitly rather than looping
+    # again or quietly stopping.
+    return "escalate_after_retry"
 
 
 builder.add_conditional_edges("verify", should_continue)
+builder.add_edge("escalate_after_retry", END)
 agent_graph = builder.compile()

@@ -18,6 +18,7 @@ NODE_LABELS = {
     "diagnose": "Diagnose",
     "action": "Action",
     "verify": "Verify",
+    "escalate_after_retry": "Escalated (retry didn't fix it)",
     "graph_crashed": "Crashed",
     "python_specialist": "Propose fix",
     "critic": "Review fix",
