@@ -36,6 +36,18 @@ _SQL_CODE_BUG_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Same idea, for plain Python bugs: these exception types are essentially
+# always a real bug in the code, not a transient/infra condition, so
+# there's no ambiguity worth leaving to the small model's judgment.
+# Deliberately NOT included: OperationalError, ConnectionError,
+# TimeoutError, InterfaceError and friends — those genuinely can be
+# transient, so RETRY should stay on the table for them.
+_PYTHON_CODE_BUG_RE = re.compile(
+    r'^(AttributeError|KeyError|IndexError|TypeError|NameError|'
+    r'ZeroDivisionError|UnboundLocalError):',
+    re.MULTILINE,
+)
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "phi4-mini")
 
@@ -206,16 +218,23 @@ async def diagnose_node(state: AgentState):
 
         return {"action_decision": new_action, "reasoning": reasoning}
 
-    # Not a missing-table shape. Separately: if this is a SQL syntax or
-    # bad-column-reference error and the LLM didn't already call it
-    # CODE_FIX, force it — these are never transient, so RETRY would just
-    # fail identically, and this needs the code_specialist, not a clear-
-    # and-rerun.
-    if state.get("action_decision") != "CODE_FIX" and _SQL_CODE_BUG_RE.search(state.get("logs", "") or ""):
+    # Not a missing-table shape. Separately: if this looks like a SQL
+    # syntax/column-reference error, or a Python exception type that's
+    # essentially always a real code bug, and the LLM didn't already call
+    # it CODE_FIX, force it — these aren't transient, so RETRY would just
+    # fail identically, and "NONE"/"ESCALATE" would leave a fixable bug
+    # sitting unfixed. This needs the code_specialist, not a clear-and-
+    # rerun or a human paged for something the agent can actually try.
+    current_action = state.get("action_decision")
+    logs_text = state.get("logs", "") or ""
+    is_sql_bug = _SQL_CODE_BUG_RE.search(logs_text)
+    is_python_bug = _PYTHON_CODE_BUG_RE.search(logs_text)
+
+    if current_action != "CODE_FIX" and (is_sql_bug or is_python_bug):
+        shape = "SQL syntax/column-reference" if is_sql_bug else "Python"
         reasoning = (
-            f"{state.get('reasoning', '')}\n\n[diagnose] Log matches a SQL syntax/column-reference "
-            f"error, which isn't transient — routing to CODE_FIX instead of "
-            f"{state.get('action_decision')}."
+            f"{state.get('reasoning', '')}\n\n[diagnose] Log matches a {shape} error, "
+            f"which isn't transient — routing to CODE_FIX instead of {current_action}."
         ).strip()
 
         await log_decision(
